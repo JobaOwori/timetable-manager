@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- Academic Ledger design tokens (RGB triplets for Tailwind alpha support) ---- */
+:root {
+  --ink: 27 41 66;
+  --parchment: 245 240 227;
+  --surface: 251 248 241;
+  --surface-2: 239 230 208;
+  --rule: 217 205 175;
+  --brass: 172 124 46;
+  --content: 33 26 16;
+  --muted: 107 98 80;
+  --danger: 156 43 43;
+  --warn: 185 121 31;
+  --good: 58 107 74;
+  --info: 46 84 120;
+}
+
+.dark {
+  --ink: 238 231 210;
+  --parchment: 20 24 42;
+  --surface: 28 33 54;
+  --surface-2: 31 36 64;
+  --rule: 51 58 88;
+  --brass: 212 165 66;
+  --content: 231 225 208;
+  --muted: 154 145 124;
+  --danger: 224 106 92;
+  --warn: 209 154 74;
+  --good: 90 147 112;
+  --info: 122 166 194;
+}
+
+html,
+body {
+  background: rgb(var(--parchment));
+  color: rgb(var(--content));
+}
+
+body {
+  font-family: var(--font-public-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgb(var(--brass));
+  color: #14182a;
+}
+
+/* Sidebar/rail stays a dark ledger index in both themes */
+.ledger-rail {
+  --ink: 217 198 144;
+  --content: 233 226 205;
+  --muted: 168 155 120;
+  --surface: 45 63 94;
+  --rule: 217 198 144;
+  --brass: 201 151 47;
+  background: #1b2942;
+  color: rgb(var(--content));
+}
+.dark .ledger-rail {
+  background: #0d1020;
+  --surface: 23 26 46;
+}
+
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-thumb { background: rgb(var(--rule) / 0.7); border-radius: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
