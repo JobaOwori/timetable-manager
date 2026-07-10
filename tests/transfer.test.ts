@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { buildSessions, autoMapColumns } from "@/lib/ingest";
-import { transferCandidates, applyTransfer, UNASSIGN } from "@/lib/transfer";
+import {
+  transferCandidates, applyTransfer, UNASSIGN,
+  rescheduleCandidates, applyReschedule,
+} from "@/lib/transfer";
 import { detectClashes } from "@/lib/analysis";
 import { ROLE_MAX_HOURS } from "@/lib/roles";
 import { DEFAULT_PROGRAMME_DEPARTMENT } from "@/lib/departments";
@@ -95,5 +98,41 @@ describe("transfer", () => {
     const cands = transferCandidates(target, s, opts);
     expect(cands[0].lecturer).toBe("Dr SameUnit");
     expect(cands[0].teachesSameUnit).toBe(true);
+  });
+
+  it("reschedule resolves a cohort clash by moving a session to a free slot", () => {
+    // Cohort B1 double-booked at MON 9:00-10:55 (two different units/lecturers/rooms).
+    // Transferring a lecturer or room can't fix it; rescheduling one session can.
+    const s = makeSessions([
+      base({ UNITCODE: "A", BATCHCODE: "B1", Faculty: "Dr One", ROOMCODE: "101", Time: "9:00AM - 10:55AM" }),
+      base({ UNITCODE: "B", BATCHCODE: "B1", Faculty: "Dr Two", ROOMCODE: "102", Time: "9:00AM - 10:55AM" }),
+      // a free later slot exists in the data (so it becomes a candidate slot)
+      base({ UNITCODE: "C", BATCHCODE: "B2", Faculty: "Dr Three", ROOMCODE: "103", Time: "2:00PM - 3:55PM" }),
+    ]);
+    expect(detectClashes(s, "batch_code").length).toBe(1);
+    const rowB = s.find((x) => x.unitCode === "B")!;
+    const cands = rescheduleCandidates(rowB, s);
+    expect(cands.length).toBeGreaterThan(0);
+    expect(cands[0].free).toBe(true);
+    expect(cands[0].recommended).toBe(true);
+    const best = cands[0];
+    const after = applyReschedule(s, rowB.rowId, best.day, best.startMin, best.endMin);
+    expect(detectClashes(after, "batch_code").length).toBe(0);
+  });
+
+  it("reschedule never offers a slot that collides with the lecturer, room or cohort", () => {
+    const s = makeSessions([
+      base({ UNITCODE: "MOVE", BATCHCODE: "B1", Faculty: "Dr X", ROOMCODE: "101", Time: "9:00AM - 10:55AM", WDAY: "MON" }),
+      // Dr X is also busy TUE 9-10:55 -> that slot must be excluded for the move
+      base({ UNITCODE: "BUSY", BATCHCODE: "B2", Faculty: "Dr X", ROOMCODE: "109", Time: "9:00AM - 10:55AM", WDAY: "TUE" }),
+      base({ UNITCODE: "SLOT", BATCHCODE: "B3", Faculty: "Dr Y", ROOMCODE: "108", Time: "2:00PM - 3:55PM", WDAY: "MON" }),
+    ]);
+    const move = s.find((x) => x.unitCode === "MOVE")!;
+    const cands = rescheduleCandidates(move, s);
+    // TUE 9:00-10:55 must NOT appear as a free option (Dr X teaches then)
+    const tueMorning = cands.find((c) => c.day === "TUE" && c.startMin === 540);
+    expect(tueMorning).toBeUndefined();
+    // every returned candidate must be genuinely free
+    expect(cands.every((c) => c.free)).toBe(true);
   });
 });

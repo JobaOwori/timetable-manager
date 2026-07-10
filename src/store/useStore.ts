@@ -4,6 +4,7 @@ import { create } from "zustand";
 import * as XLSX from "xlsx";
 import {
   ColumnMapping,
+  DayCode,
   DEFAULT_THRESHOLDS,
   DepartmentRegistry,
   RoleMaxHours,
@@ -27,7 +28,7 @@ import {
 } from "@/lib/ingest";
 import { DEFAULT_PROGRAMME_DEPARTMENT } from "@/lib/departments";
 import { DEFAULT_ROLE, ROLE_MAX_HOURS } from "@/lib/roles";
-import { applyRoomChange, applyTransfer } from "@/lib/transfer";
+import { applyRoomChange, applyReschedule, applyTransfer } from "@/lib/transfer";
 import { finalizeSession } from "@/lib/ingest";
 
 interface State {
@@ -61,6 +62,7 @@ interface State {
   setFilter: (key: "fPrograms" | "fLecturers" | "fRooms" | "fDays" | "fDepartments", v: string[]) => void;
   transferLecturer: (rowId: number, newLecturer: string) => void;
   changeRoom: (rowId: number, newRoom: string) => void;
+  reschedule: (rowId: number, day: DayCode, startMin: number, endMin: number) => void;
   updateSession: (rowId: number, patch: Partial<Session>) => void;
   resetEdits: () => void;
 }
@@ -98,7 +100,10 @@ function seedRegistriesFromSessions(sessions: Session[]) {
   }
   const departmentRegistry: DepartmentRegistry = {};
   for (const p of new Set(sessions.map((s) => s.programme).filter((x): x is string => !!x))) {
-    departmentRegistry[p] = DEFAULT_PROGRAMME_DEPARTMENT[p.toUpperCase()] ?? "";
+    // Key canonically by uppercase so it matches departmentFor()/setDepartment(),
+    // which both look up by programme.toUpperCase().
+    const key = p.toUpperCase();
+    departmentRegistry[key] = DEFAULT_PROGRAMME_DEPARTMENT[key] ?? "";
   }
   return { roleRegistry, departmentRegistry };
 }
@@ -201,6 +206,8 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({ sessions: applyTransfer(s.sessions, rowId, newLecturer) })),
   changeRoom: (rowId, newRoom) =>
     set((s) => ({ sessions: applyRoomChange(s.sessions, rowId, newRoom) })),
+  reschedule: (rowId, day, startMin, endMin) =>
+    set((s) => ({ sessions: applyReschedule(s.sessions, rowId, day, startMin, endMin) })),
   updateSession: (rowId, patch) =>
     set((s) => ({
       sessions: s.sessions.map((sess) =>

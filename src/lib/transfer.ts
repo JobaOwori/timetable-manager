@@ -3,6 +3,8 @@
 // alternative lecturers it could be reassigned to, and apply the reassignment
 // immutably. This is the app's headline feature.
 import {
+  DayCode,
+  DAY_ORDER,
   DepartmentRegistry,
   RoleMaxHours,
   RoleRegistry,
@@ -13,6 +15,7 @@ import {
 import { DEFAULT_ROLE, maxHoursForRole, workloadStatus } from "./roles";
 import { departmentFor } from "./departments";
 import { finalizeSession } from "./ingest";
+import { minutesToLabel } from "./clean";
 
 export const UNASSIGN = "\u2014 Unassign (TBA) \u2014";
 
@@ -205,6 +208,113 @@ export function roomCandidates(
 
 export function applyRoomChange(sessions: Session[], rowId: number, newRoom: string): Session[] {
   return sessions.map((s) => (s.rowId === rowId ? finalizeSession({ ...s, room: newRoom }) : s));
+}
+
+// ---- Rescheduling (the correct remedy for COHORT clashes, and an alternative
+//      for lecturer/room clashes: move the session to a free day+time slot) ----
+
+export interface RescheduleCandidate {
+  day: DayCode;
+  startMin: number;
+  endMin: number;
+  label: string;
+  free: boolean;
+  blockedBy: string | null; // e.g. "Lecturer busy", "Room occupied", "Cohort busy"
+  sameDay: boolean;
+  score: number;
+  recommended: boolean;
+}
+
+/**
+ * Suggest free (day, time-slot) placements for `session`. Candidate slots are the
+ * distinct time slots that already exist in the term's data (so we reuse the
+ * institution's real periods), across every day present. A slot is "free" when
+ * moving the session there introduces no lecturer, room, or cohort overlap.
+ */
+export function rescheduleCandidates(
+  session: Session,
+  sessions: Session[],
+  opts?: { includeBlocked?: boolean },
+): RescheduleCandidate[] {
+  const termRows = sessions.filter((s) => s.term === session.term);
+  // distinct slots (start,end) present in the term
+  const slotMap = new Map<string, { startMin: number; endMin: number }>();
+  for (const s of termRows) {
+    if (s.startMin === null || s.endMin === null) continue;
+    slotMap.set(`${s.startMin}-${s.endMin}`, { startMin: s.startMin, endMin: s.endMin });
+  }
+  const slots = [...slotMap.values()].sort((a, b) => a.startMin - b.startMin);
+  const days = DAY_ORDER.filter((d) => termRows.some((s) => s.day === d));
+
+  const probe = (day: DayCode, startMin: number, endMin: number): string | null => {
+    const moved: Session = { ...session, day, startMin, endMin };
+    // lecturer
+    if (session.lecturer !== null) {
+      const c = termRows.find(
+        (s) => s.lecturer === session.lecturer && s.rowId !== session.rowId && overlaps(s, moved),
+      );
+      if (c) return `Lecturer busy (${c.unitCode ?? "class"})`;
+    }
+    // room
+    if (session.room !== null && !session.isVirtualRoom) {
+      const c = termRows.find(
+        (s) => s.room === session.room && !s.isVirtualRoom && s.rowId !== session.rowId && overlaps(s, moved),
+      );
+      if (c) return `Room ${session.room} occupied (${c.unitCode ?? "class"})`;
+    }
+    // cohort
+    if (session.batchCode !== null) {
+      const c = termRows.find(
+        (s) => s.batchCode === session.batchCode && s.rowId !== session.rowId && overlaps(s, moved),
+      );
+      if (c) return `Cohort busy (${c.unitCode ?? "class"})`;
+    }
+    return null;
+  };
+
+  const candidates: RescheduleCandidate[] = [];
+  for (const day of days) {
+    for (const slot of slots) {
+      // skip the current placement
+      if (day === session.day && slot.startMin === session.startMin && slot.endMin === session.endMin) continue;
+      const blockedBy = probe(day, slot.startMin, slot.endMin);
+      const free = blockedBy === null;
+      const sameDay = day === session.day;
+      let score = 0;
+      if (free) score += 1000;
+      if (sameDay) score += 40;
+      score += 1000 - slot.startMin / 10; // mild preference for earlier slots
+      candidates.push({
+        day,
+        startMin: slot.startMin,
+        endMin: slot.endMin,
+        label: `${day} ${minutesToLabel(slot.startMin)} - ${minutesToLabel(slot.endMin)}`,
+        free,
+        blockedBy,
+        sameDay,
+        score: round(score),
+        recommended: false,
+      });
+    }
+  }
+
+  const list = opts?.includeBlocked ? candidates : candidates.filter((c) => c.free);
+  list.sort((a, b) => b.score - a.score);
+  const best = list.find((c) => c.free);
+  if (best) best.recommended = true;
+  return list;
+}
+
+export function applyReschedule(
+  sessions: Session[],
+  rowId: number,
+  day: DayCode,
+  startMin: number,
+  endMin: number,
+): Session[] {
+  return sessions.map((s) =>
+    s.rowId === rowId ? finalizeSession({ ...s, day, dayRaw: day, startMin, endMin }) : s,
+  );
 }
 
 function round(n: number, dp = 2): number {

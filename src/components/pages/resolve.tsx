@@ -11,15 +11,20 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clash, Session } from "@/lib/types";
 import {
-  transferCandidates, roomCandidates, UNASSIGN, TransferCandidate, RoomCandidate,
+  transferCandidates, roomCandidates, rescheduleCandidates,
+  UNASSIGN, TransferCandidate, RoomCandidate, RescheduleCandidate,
 } from "@/lib/transfer";
 import { fmtHours } from "@/lib/cn";
 
 type Filter = "all" | "lecturer" | "room" | "batch_code";
 
 export function ResolvePage() {
-  const { filtered } = useFilteredSessions();
-  const { clashes, summary } = useAnalysis(filtered);
+  // Detect conflicts over the FULL term, not the sidebar-filtered subset: a room or
+  // cohort clash needs both colliding sessions present, and a sidebar filter could
+  // remove the counterpart — hiding a real, unresolved double-booking. Resolve is
+  // about clearing every conflict in the term, so it always sees the whole term.
+  const { termSessions } = useFilteredSessions();
+  const { clashes, summary } = useAnalysis(termSessions);
   const [filter, setFilter] = useState<Filter>("all");
 
   const groups = useMemo(() => groupClashes(clashes), [clashes]);
@@ -146,6 +151,8 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
   );
 }
 
+type Remedy = "transfer" | "room" | "reschedule";
+
 function SessionRow({
   session, clashType, open, onToggle,
 }: {
@@ -154,6 +161,19 @@ function SessionRow({
   open: boolean;
   onToggle: () => void;
 }) {
+  // Primary remedy per conflict type: lecturer clash -> transfer; room clash ->
+  // move room; cohort clash -> reschedule (transferring a lecturer or room does
+  // NOT free a double-booked student cohort). Reschedule is offered as an
+  // alternative for the others too.
+  const primary: Remedy = clashType === "room" ? "room" : clashType === "batch_code" ? "reschedule" : "transfer";
+  const [remedy, setRemedy] = useState<Remedy>(primary);
+
+  const remedies: { id: Remedy; label: string }[] = [
+    ...(clashType === "lecturer" ? [{ id: "transfer" as Remedy, label: "Transfer lecturer" }] : []),
+    ...(clashType === "room" ? [{ id: "room" as Remedy, label: "Move room" }] : []),
+    { id: "reschedule" as Remedy, label: "Reschedule" },
+  ];
+
   return (
     <div>
       <div className="flex items-center gap-3 px-4 py-2.5 text-sm">
@@ -168,17 +188,38 @@ function SessionRow({
             {session.lecturer ?? "TBA"}
           </div>
         </div>
-        <Button size="sm" variant={open ? "primary" : "outline"} onClick={onToggle}>
-          <ArrowRightLeft size={13} /> {open ? "Close" : clashType === "room" ? "Move room" : "Transfer"}
+        <Button
+          size="sm"
+          variant={open ? "primary" : "outline"}
+          onClick={() => {
+            setRemedy(primary);
+            onToggle();
+          }}
+        >
+          <ArrowRightLeft size={13} /> {open ? "Close" : "Fix"}
         </Button>
       </div>
       {open && (
-        <div className="px-4 pb-4 animate-fade">
-          {clashType === "room" ? (
-            <RoomTransferPanel session={session} onDone={onToggle} />
-          ) : (
-            <LecturerTransferPanel session={session} onDone={onToggle} />
+        <div className="px-4 pb-4 animate-fade space-y-2">
+          {remedies.length > 1 && (
+            <div className="flex gap-1.5">
+              {remedies.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setRemedy(r.id)}
+                  className={`rounded px-2.5 py-1 text-xs border transition ${
+                    remedy === r.id ? "bg-ink text-parchment border-ink" : "border-rule text-muted hover:text-ink"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
           )}
+          {remedy === "room" && <RoomTransferPanel session={session} onDone={onToggle} />}
+          {remedy === "transfer" && <LecturerTransferPanel session={session} onDone={onToggle} />}
+          {remedy === "reschedule" && <ReschedulePanel session={session} onDone={onToggle} />}
         </div>
       )}
     </div>
@@ -333,5 +374,52 @@ function RoomChip({ c, onPick }: { c: RoomCandidate; onPick: () => void }) {
         cap {c.capacity ?? "?"} {c.fits ? "" : "· tight"}
       </div>
     </button>
+  );
+}
+
+function ReschedulePanel({ session, onDone }: { session: Session; onDone: () => void }) {
+  const sessions = useStore((s) => s.sessions);
+  const reschedule = useStore((s) => s.reschedule);
+  const candidates = useMemo(() => rescheduleCandidates(session, sessions), [session, sessions]);
+
+  const pick = (c: RescheduleCandidate) => {
+    reschedule(session.rowId, c.day, c.startMin, c.endMin);
+    onDone();
+  };
+
+  return (
+    <div className="rounded-card border border-rule bg-parchment/40 p-3">
+      <SectionTitle className="mb-2">
+        Reschedule <span className="font-mono">{session.unitCode}</span> to a free slot (no
+        lecturer, room or cohort clash)…
+      </SectionTitle>
+      {candidates.length === 0 ? (
+        <p className="text-xs text-muted py-2">
+          No completely-free slot in this term. Try transferring the lecturer/room instead, or
+          relax a constraint.
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {candidates.slice(0, 30).map((c) => (
+            <button
+              key={`${c.day}-${c.startMin}-${c.endMin}`}
+              type="button"
+              onClick={() => pick(c)}
+              className={`rounded border p-2 text-left transition bg-surface hover:border-brass hover:shadow-sm ${
+                c.recommended ? "ring-1 ring-brass border-brass" : "border-rule"
+              }`}
+            >
+              <div className="flex items-center gap-1">
+                <span className="font-mono text-xs font-semibold text-ink">{c.day}</span>
+                {c.recommended && <Badge tone="brass">Best</Badge>}
+              </div>
+              <div className="text-[0.7rem] text-muted mt-0.5">
+                {c.label.replace(`${c.day} `, "")}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
