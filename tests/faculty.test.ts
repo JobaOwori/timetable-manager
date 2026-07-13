@@ -40,6 +40,12 @@ const resolveOpts = {
   capacityTolerance: 20,
 };
 
+const countAllClashes = (sessions: Session[]) =>
+  (["lecturer", "room", "batch_code"] as const).reduce(
+    (total, type) => total + detectClashes(sessions, type).length,
+    0,
+  );
+
 describe("faculty dedup", () => {
   it("keys names order-independently (case/space/punct)", () => {
     expect(lecturerKey("JAMES KAWUKI")).toBe(lecturerKey("James  Kawuki"));
@@ -128,9 +134,41 @@ describe("autoResolve", () => {
     ]);
     const res = autoResolve(s, resolveOpts, { types: ["batch_code"] });
     // only one slot in the term -> can't reschedule -> unresolved with reasons
-    if (res.unresolved.length > 0) {
-      expect(res.unresolved[0].reasons.join(" ")).toMatch(/free|slot|cohort/i);
+    expect(res.unresolved.length).toBeGreaterThan(0);
+    for (const unresolved of res.unresolved) {
+      const reasons = unresolved.reasons.join(" ");
+      expect(reasons).toMatch(/free (time )?slot|room|lecturer|cohort/i);
+      expect(reasons).not.toContain("Still in conflict after resolution.");
     }
+  });
+
+  it("resolves a room clash without oscillating or transferring lecturers", () => {
+    const s = makeSessions([
+      base({ UNITCODE: "R1", Faculty: "Dr A", ROOMCODE: "101", BATCHCODE: "B1", WDAY: "MON", Time: "9:00AM - 10:55AM" }),
+      base({ UNITCODE: "R2", Faculty: "Dr B", ROOMCODE: "101", BATCHCODE: "B2", WDAY: "MON", Time: "9:00AM - 10:55AM" }),
+      base({ UNITCODE: "FREE", Faculty: "Dr C", ROOMCODE: "102", BATCHCODE: "B3", WDAY: "TUE", Time: "2:00PM - 3:55PM" }),
+    ]);
+    expect(detectClashes(s, "room").length).toBe(1);
+    const res = autoResolve(s, resolveOpts, { types: ["room"] });
+    expect(res.steps.length).toBeGreaterThan(0);
+    expect(res.steps.length).toBeLessThanOrEqual(2);
+    expect(res.steps.every((step) => step.action !== "transfer")).toBe(true);
+    expect(detectClashes(res.sessions, "room").length).toBe(0);
+  });
+
+  it("keeps multi-clash auto-resolution bounded by monotonic progress", () => {
+    const s = makeSessions([
+      base({ UNITCODE: "A", Faculty: "Dr Busy", ROOMCODE: "101", BATCHCODE: "B1", WDAY: "MON", Time: "9:00AM - 10:55AM" }),
+      base({ UNITCODE: "B", Faculty: "Dr Busy", ROOMCODE: "102", BATCHCODE: "B2", WDAY: "MON", Time: "9:00AM - 10:55AM" }),
+      base({ UNITCODE: "C", Faculty: "Dr C", ROOMCODE: "101", BATCHCODE: "B3", WDAY: "MON", Time: "9:00AM - 10:55AM" }),
+      base({ UNITCODE: "D", Faculty: "Dr D", ROOMCODE: "103", BATCHCODE: "B4", WDAY: "TUE", Time: "2:00PM - 3:55PM" }),
+      base({ UNITCODE: "E", Faculty: "Dr E", ROOMCODE: "104", BATCHCODE: "B5", WDAY: "WED", Time: "11:00AM - 12:55PM" }),
+    ]);
+    const initialClashes = countAllClashes(s);
+    expect(initialClashes).toBeGreaterThan(1);
+    const res = autoResolve(s, resolveOpts);
+    expect(res.steps.length).toBeLessThanOrEqual(initialClashes + 2);
+    expect(countAllClashes(res.sessions)).toBe(0);
   });
 
   it("does not create new clashes (never trades one for another)", () => {

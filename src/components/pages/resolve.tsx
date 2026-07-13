@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import {
-  ArrowRightLeft, CheckCircle2, DoorOpen, User, Users, Clock, Wand2, Info,
+  ArrowRightLeft, CheckCircle2, DoorOpen, User, Users, Clock, Wand2, Info, Loader2,
 } from "lucide-react";
 import { useFilteredSessions, useAnalysis } from "@/store/selectors";
 import { useStore } from "@/store/useStore";
@@ -41,13 +41,23 @@ export function ResolvePage() {
   const opts = useResolveOpts();
   const [filter, setFilter] = useState<Filter>("all");
   const [result, setResult] = useState<ResolveResult | null>(null);
+  const [resolving, setResolving] = useState(false);
 
   const groups = useMemo(() => groupClashes(clashes), [clashes]);
   const shown = filter === "all" ? groups : groups.filter((g) => g.clashType === filter);
 
   const resolveAll = () => {
+    if (resolving) return;
     const types = filter === "all" ? undefined : ([filter] as ("lecturer" | "room" | "batch_code")[]);
-    setResult(autoResolve(opts, { types }));
+    setResolving(true);
+    requestAnimationFrame(() => setTimeout(() => {
+      try {
+        const r = autoResolve(opts, { types });
+        setResult(r);
+      } finally {
+        setResolving(false);
+      }
+    }, 0));
   };
 
   const chip = (id: Filter, label: string, n: number) => (
@@ -74,8 +84,16 @@ export function ResolvePage() {
             resolve everything at once and tell you exactly what it couldn&apos;t fix.
           </p>
         </div>
-        <Button variant="primary" onClick={resolveAll} disabled={groups.length === 0}>
-          <Wand2 size={15} /> Auto-resolve {filter === "all" ? "all" : filter}
+        <Button variant="primary" onClick={resolveAll} disabled={groups.length === 0 || resolving}>
+          {resolving ? (
+            <>
+              <Loader2 size={15} className="animate-spin" /> Resolving…
+            </>
+          ) : (
+            <>
+              <Wand2 size={15} /> Auto-resolve {filter === "all" ? "all" : filter}
+            </>
+          )}
         </Button>
       </div>
 
@@ -105,8 +123,10 @@ export function ResolvePage() {
 }
 
 function ResolveReport({ result, onDismiss }: { result: ResolveResult; onDismiss: () => void }) {
+  const unresolvedGroups = useMemo(() => groupUnresolved(result.unresolved), [result.unresolved]);
+
   return (
-    <Card className="p-4 space-y-3">
+    <Card className="p-4 space-y-3 max-h-[calc(100vh-8rem)] overflow-y-auto">
       <div className="flex items-center justify-between">
         <SectionTitle className="mb-0 border-0 pb-0">
           <Wand2 size={14} className="inline mr-1.5 text-brass" />
@@ -124,36 +144,74 @@ function ResolveReport({ result, onDismiss }: { result: ResolveResult; onDismiss
       </div>
 
       {result.steps.length > 0 && (
-        <div className="max-h-40 overflow-auto rounded border border-rule divide-y divide-rule/60">
-          {result.steps.map((s, i) => (
-            <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 text-xs">
-              <Badge tone={s.action === "transfer" ? "info" : s.action === "room" ? "warn" : "brass"}>
-                {s.action}
-              </Badge>
-              <span className="font-mono text-ink">{s.unitCode ?? `#${s.rowId}`}</span>
-              <span className="text-muted truncate">
-                {s.from} <ArrowRightLeft size={10} className="inline mx-0.5" /> {s.to}
-              </span>
-            </div>
-          ))}
+        <div className="rounded border border-rule overflow-hidden">
+          <div className="px-2.5 py-1.5 text-xs font-medium text-content bg-surface-2/40 border-b border-rule">
+            Changes applied ({result.steps.length})
+          </div>
+          <div className="max-h-44 overflow-auto divide-y divide-rule/60">
+            {result.steps.map((s, i) => (
+              <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 text-xs">
+                <Badge tone={s.action === "transfer" ? "info" : s.action === "room" ? "warn" : "brass"}>
+                  {s.action}
+                </Badge>
+                <span className="font-mono text-ink">{s.unitCode ?? `#${s.rowId}`}</span>
+                <span className="text-muted truncate">
+                  {s.from} <ArrowRightLeft size={10} className="inline mx-0.5" /> {s.to}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       {result.unresolved.length > 0 && (
-        <div className="rounded border border-warn/30 bg-warn/10 p-2.5 space-y-1.5">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-content">
-            <Info size={13} className="text-warn" /> Couldn&apos;t auto-resolve these — here&apos;s why:
+        <div className="rounded border border-warn/30 bg-warn/10 overflow-hidden">
+          <div className="flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium text-content border-b border-warn/20">
+            <Info size={13} className="text-warn" />
+            Couldn&apos;t auto-resolve ({result.unresolved.length}) — here&apos;s why:
           </div>
-          {result.unresolved.map((u) => (
-            <div key={u.rowId} className="text-xs text-content">
-              <span className="font-mono text-ink">{u.unitCode ?? `#${u.rowId}`}</span>{" "}
-              <span className="text-muted">— {u.reasons.join(" ")}</span>
-            </div>
-          ))}
+          <div className="max-h-56 overflow-auto divide-y divide-warn/20">
+            {unresolvedGroups.map((group) => {
+              const visibleUnits = group.units.slice(0, 8);
+              const hiddenUnitCount = group.units.length - visibleUnits.length;
+              return (
+                <div key={group.reason} className="px-2.5 py-2 text-xs text-content">
+                  <span className="font-medium text-ink">{group.reason}</span>{" "}
+                  <span className="text-muted">
+                    — <span className="font-mono text-ink">{visibleUnits.join(", ")}</span>
+                    {hiddenUnitCount > 0 && `, +${hiddenUnitCount} more`} ({group.total}{" "}
+                    {group.total === 1 ? "class" : "classes"})
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </Card>
   );
+}
+
+interface UnresolvedReasonGroup {
+  reason: string;
+  units: string[];
+  total: number;
+}
+
+function groupUnresolved(unresolved: ResolveResult["unresolved"]): UnresolvedReasonGroup[] {
+  const groups = new Map<string, UnresolvedReasonGroup>();
+  for (const u of unresolved) {
+    const reason = u.reasons.length > 0 ? u.reasons.join(" ") : "No reason provided";
+    let group = groups.get(reason);
+    if (!group) {
+      group = { reason, units: [], total: 0 };
+      groups.set(reason, group);
+    }
+    const unit = u.unitCode ?? `#${u.rowId}`;
+    if (!group.units.includes(unit)) group.units.push(unit);
+    group.total += 1;
+  }
+  return [...groups.values()].sort((a, b) => b.total - a.total || a.reason.localeCompare(b.reason));
 }
 
 interface ConflictGroup {
@@ -198,10 +256,19 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
     .map((id) => sessions.find((s) => s.rowId === id))
     .filter((s): s is Session => !!s);
   const [resolvingRow, setResolvingRow] = useState<number | null>(null);
+  const [resolvingGroup, setResolvingGroup] = useState(false);
 
   const resolveGroup = () => {
-    if (group.clashType === "lecturer") autoResolve(opts, { lecturer: group.groupValue, types: ["lecturer"] });
-    else autoResolve(opts, { types: [group.clashType] });
+    if (resolvingGroup) return;
+    setResolvingGroup(true);
+    requestAnimationFrame(() => setTimeout(() => {
+      try {
+        if (group.clashType === "lecturer") autoResolve(opts, { lecturer: group.groupValue, types: ["lecturer"] });
+        else autoResolve(opts, { types: [group.clashType] });
+      } finally {
+        setResolvingGroup(false);
+      }
+    }, 0));
   };
 
   if (rows.length < 2) return null; // group already cleared by a prior fix
@@ -218,8 +285,16 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
           <Clock size={12} /> {group.day}
         </span>
         <span className="text-xs text-muted">{rows.length} sessions in conflict</span>
-        <Button size="sm" variant="outline" className="ml-auto" onClick={resolveGroup}>
-          <Wand2 size={12} /> Auto-fix this
+        <Button size="sm" variant="outline" className="ml-auto" onClick={resolveGroup} disabled={resolvingGroup}>
+          {resolvingGroup ? (
+            <>
+              <Loader2 size={12} className="animate-spin" /> Resolving…
+            </>
+          ) : (
+            <>
+              <Wand2 size={12} /> Auto-fix this
+            </>
+          )}
         </Button>
       </div>
 

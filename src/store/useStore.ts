@@ -1,9 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import * as XLSX from "xlsx";
 import {
-  ColumnMapping,
   DayCode,
   DEFAULT_THRESHOLDS,
   DepartmentRegistry,
@@ -13,34 +11,19 @@ import {
   Session,
   Thresholds,
 } from "@/lib/types";
-import {
-  ALL_FIELDS,
-  autoMapColumns,
-  buildSessions,
-  dropBlankRows,
-  guessRoomSheet,
-  guessTimetableSheet,
-  parseRoomRegistry,
-  readCsv,
-  readSheet,
-  readWorkbook,
-  sheetNames,
-} from "@/lib/ingest";
-import { DEFAULT_PROGRAMME_DEPARTMENT } from "@/lib/departments";
-import { DEFAULT_ROLE, ROLE_MAX_HOURS } from "@/lib/roles";
+import { ROLE_MAX_HOURS } from "@/lib/roles";
 import { applyRoomChange, applyReschedule, applyTransfer } from "@/lib/transfer";
 import { finalizeSession } from "@/lib/ingest";
-import {
-  applyFacultyMerge,
-  facultyDedupMap,
-  mergeLecturer,
-  subjectAssignmentsFromSessions,
-} from "@/lib/faculty";
+import { applyFacultyMerge, facultyDedupMap, mergeLecturer } from "@/lib/faculty";
 import { autoResolve, AutoResolveOptions, ResolveResult } from "@/lib/resolve";
+import { IngestResult } from "@/lib/pipeline";
+import { ingestFileInWorker } from "@/lib/ingest-client";
 
 interface State {
   fileName: string | null;
   loaded: boolean;
+  loading: boolean;
+  loadError: string | null;
   originalSessions: Session[];
   sessions: Session[]; // working copy
   roomRegistry: RoomRegistry;
@@ -58,8 +41,8 @@ interface State {
   fDays: string[];
   fDepartments: string[];
 
-  loadArrayBuffer: (buf: ArrayBuffer, name: string) => void;
-  loadCsvText: (text: string, name: string) => void;
+  loadArrayBuffer: (buf: ArrayBuffer, name: string) => Promise<void>;
+  loadCsvText: (text: string, name: string) => Promise<void>;
   loadSampleFromUrl: (url: string) => Promise<void>;
   setActiveTerm: (t: string) => void;
   setRoomRegistry: (r: RoomRegistry) => void;
@@ -106,51 +89,30 @@ function persist(p: Persisted) {
   }
 }
 
-function seedRegistriesFromSessions(sessions: Session[]) {
-  const roleRegistry: RoleRegistry = {};
-  for (const l of new Set(sessions.map((s) => s.lecturer).filter((x): x is string => !!x))) {
-    roleRegistry[l] = DEFAULT_ROLE;
-  }
-  const departmentRegistry: DepartmentRegistry = {};
-  for (const p of new Set(sessions.map((s) => s.programme).filter((x): x is string => !!x))) {
-    // Key canonically by uppercase so it matches departmentFor()/setDepartment(),
-    // which both look up by programme.toUpperCase().
-    const key = p.toUpperCase();
-    departmentRegistry[key] = DEFAULT_PROGRAMME_DEPARTMENT[key] ?? "";
-  }
-  return { roleRegistry, departmentRegistry };
-}
-
-function distinctTerms(sessions: Session[]): string[] {
-  return [...new Set(sessions.map((s) => s.term).filter((t): t is string => !!t))].sort();
-}
-
-/** Shared post-ingest pipeline: merge duplicate faculty, then seed all registries. */
-function prepare(rawSessions: Session[]) {
-  const sessions = applyFacultyMerge(rawSessions, facultyDedupMap(rawSessions));
-  const { roleRegistry, departmentRegistry } = seedRegistriesFromSessions(sessions);
-  const subjectAssignments = subjectAssignmentsFromSessions(sessions);
-  const terms = distinctTerms(sessions);
-  return { sessions, roleRegistry, departmentRegistry, subjectAssignments, terms };
-}
-
-function ingestWorkbook(wb: XLSX.WorkBook): { sessions: Session[]; roomRegistry: RoomRegistry } {
-  const names = sheetNames(wb);
-  const ttSheet = guessTimetableSheet(names) ?? names[0];
-  const table = readSheet(wb, ttSheet);
-  const mapping: ColumnMapping = autoMapColumns(table.header);
-  // ensure all fields considered even if not mapped
-  void ALL_FIELDS;
-  const rows = dropBlankRows(table, mapping);
-  const sessions = buildSessions(rows, mapping);
-  const roomSheet = guessRoomSheet(names);
-  const roomRegistry = roomSheet ? parseRoomRegistry(wb, roomSheet) : {};
-  return { sessions, roomRegistry };
+function applyResult(name: string, r: IngestResult) {
+  return {
+    fileName: name,
+    loaded: true,
+    loading: false,
+    loadError: null,
+    originalSessions: r.sessions,
+    sessions: r.sessions,
+    roomRegistry: r.roomRegistry,
+    roleRegistry: r.roleRegistry,
+    departmentRegistry: r.departmentRegistry,
+    subjectAssignments: r.subjectAssignments,
+    terms: r.terms,
+    activeTerm: r.terms[0] ?? null,
+    fPrograms: [] as string[], fLecturers: [] as string[], fRooms: [] as string[],
+    fDays: [] as string[], fDepartments: [] as string[],
+  };
 }
 
 export const useStore = create<State>((set, get) => ({
   fileName: null,
   loaded: false,
+  loading: false,
+  loadError: null,
   originalSessions: [],
   sessions: [],
   roomRegistry: {},
@@ -167,43 +129,35 @@ export const useStore = create<State>((set, get) => ({
   fDays: [],
   fDepartments: [],
 
-  loadArrayBuffer: (buf, name) => {
-    const wb = readWorkbook(buf);
-    const { sessions: raw, roomRegistry } = ingestWorkbook(wb);
-    const { sessions, roleRegistry, departmentRegistry, subjectAssignments, terms } = prepare(raw);
-    set({
-      fileName: name,
-      loaded: true,
-      originalSessions: sessions,
-      sessions,
-      roomRegistry,
-      roleRegistry,
-      departmentRegistry,
-      subjectAssignments,
-      terms,
-      activeTerm: terms[0] ?? null,
-      fPrograms: [], fLecturers: [], fRooms: [], fDays: [], fDepartments: [],
-    });
+  loadArrayBuffer: async (buf, name) => {
+    set({ loading: true, loadError: null, fileName: name });
+    try {
+      const r = await ingestFileInWorker("xlsx", buf);
+      set(applyResult(name, r));
+    } catch (e) {
+      set({ loading: false, loadError: e instanceof Error ? e.message : "Failed to read the file." });
+    }
   },
 
-  loadCsvText: (text, name) => {
-    const table = readCsv(text);
-    const mapping = autoMapColumns(table.header);
-    const rows = dropBlankRows(table, mapping);
-    const raw = buildSessions(rows, mapping);
-    const { sessions, roleRegistry, departmentRegistry, subjectAssignments, terms } = prepare(raw);
-    set({
-      fileName: name, loaded: true, originalSessions: sessions, sessions,
-      roomRegistry: {}, roleRegistry, departmentRegistry, subjectAssignments, terms,
-      activeTerm: terms[0] ?? null,
-      fPrograms: [], fLecturers: [], fRooms: [], fDays: [], fDepartments: [],
-    });
+  loadCsvText: async (text, name) => {
+    set({ loading: true, loadError: null, fileName: name });
+    try {
+      const r = await ingestFileInWorker("csv", text);
+      set(applyResult(name, r));
+    } catch (e) {
+      set({ loading: false, loadError: e instanceof Error ? e.message : "Failed to read the file." });
+    }
   },
 
   loadSampleFromUrl: async (url) => {
-    const res = await fetch(url);
-    const buf = await res.arrayBuffer();
-    get().loadArrayBuffer(buf, "sample_timetable.xlsx");
+    set({ loading: true, loadError: null });
+    try {
+      const res = await fetch(url);
+      const buf = await res.arrayBuffer();
+      await get().loadArrayBuffer(buf, "sample_timetable.xlsx");
+    } catch (e) {
+      set({ loading: false, loadError: e instanceof Error ? e.message : "Failed to load the sample." });
+    }
   },
 
   setActiveTerm: (t) => set({ activeTerm: t, fPrograms: [], fLecturers: [], fRooms: [], fDays: [], fDepartments: [] }),

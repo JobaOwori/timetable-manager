@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import {
-  ChevronRight, FileSpreadsheet, FolderOpen, RotateCcw, SlidersHorizontal, Upload,
+  ChevronRight, FileSpreadsheet, FolderOpen, RotateCcw, SlidersHorizontal, Upload, Loader2,
 } from "lucide-react";
 import { useStore } from "@/store/useStore";
 import { useFilterOptions } from "@/store/selectors";
@@ -44,6 +44,8 @@ function Section({
 
 export function ConfigRail() {
   const loaded = useStore((s) => s.loaded);
+  const loading = useStore((s) => s.loading);
+  const loadError = useStore((s) => s.loadError);
   const fileName = useStore((s) => s.fileName);
   const loadArrayBuffer = useStore((s) => s.loadArrayBuffer);
   const loadCsvText = useStore((s) => s.loadCsvText);
@@ -83,19 +85,29 @@ export function ConfigRail() {
       <div className="space-y-2 mb-1">
         <button
           type="button"
+          disabled={loading}
           onClick={() => loadSample("/sample/sample_timetable.xlsx")}
-          className="w-full flex items-center gap-2 rounded border border-[rgb(201,151,47)]/60 bg-[rgb(201,151,47)]/15 px-3 py-2 text-sm text-[rgb(233,226,205)] hover:bg-[rgb(201,151,47)]/25 transition"
+          className="w-full flex items-center gap-2 rounded border border-[rgb(201,151,47)]/60 bg-[rgb(201,151,47)]/15 px-3 py-2 text-sm text-[rgb(233,226,205)] hover:bg-[rgb(201,151,47)]/25 transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <FolderOpen size={15} /> Load Fall-2026 sample
         </button>
         <button
           type="button"
+          disabled={loading}
           onClick={() => fileRef.current?.click()}
-          className="w-full flex items-center gap-2 rounded border border-current/30 px-3 py-2 text-sm text-[rgb(233,226,205)] hover:bg-white/5 transition"
+          className="w-full flex items-center gap-2 rounded border border-current/30 px-3 py-2 text-sm text-[rgb(233,226,205)] hover:bg-white/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Upload size={15} /> Upload CSV / XLSX
         </button>
-        {fileName && (
+        {loading && (
+          <div className="flex items-center gap-2 text-[0.72rem] text-[rgb(217,198,144)] animate-fade">
+            <Loader2 size={13} className="animate-spin" /> Reading {fileName ?? "file"}…
+          </div>
+        )}
+        {loadError && !loading && (
+          <div className="text-[0.7rem] text-red-300 leading-snug">Couldn&apos;t read that file: {loadError}</div>
+        )}
+        {fileName && !loading && (
           <div className="flex items-center gap-1.5 text-[0.7rem] text-[rgb(168,155,120)]">
             <FileSpreadsheet size={12} /> {fileName}
           </div>

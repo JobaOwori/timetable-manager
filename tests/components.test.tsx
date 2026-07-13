@@ -16,12 +16,14 @@ const CSV = [
 ].join("\n");
 
 function seed() {
-  useStore.getState().loadCsvText(CSV, "t.csv");
+  return useStore.getState().loadCsvText(CSV, "t.csv");
 }
 const row = (unit: string): Session =>
   useStore.getState().sessions.find((s) => s.unitCode === unit)!;
 
-beforeEach(() => seed());
+beforeEach(async () => {
+  await seed();
+});
 afterEach(() => cleanup());
 
 describe("ResolutionPanel (Fix dialog)", () => {

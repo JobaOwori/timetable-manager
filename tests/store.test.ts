@@ -17,11 +17,13 @@ const CSV = [
 ].join("\n");
 
 function load() {
-  useStore.getState().loadCsvText(CSV, "test.csv");
+  return useStore.getState().loadCsvText(CSV, "test.csv");
 }
 
 describe("store integration", () => {
-  beforeEach(() => load());
+  beforeEach(async () => {
+    await load();
+  });
 
   it("loads, isolates terms and merges duplicate faculty on ingest", () => {
     const st = useStore.getState();

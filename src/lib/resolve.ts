@@ -2,7 +2,7 @@
 // scheduling conflicts by rescheduling to a free slot or transferring to an
 // available lecturer, and — crucially — explain in plain language when a
 // conflict cannot be cleared automatically.
-import { Session } from "./types";
+import { Clash, ClashType, Session } from "./types";
 import { detectClashes } from "./analysis";
 import {
   CandidateOptions,
@@ -45,81 +45,201 @@ function pickMover(a: Session, b: Session): Session {
   return a.rowId > b.rowId ? a : b;
 }
 
-/** Try to relocate one session out of a conflict. Returns a step or the reasons it failed. */
-function relocate(
-  working: Session[],
-  session: Session,
-  opts: AutoResolveOptions,
-  kinds: { lecturer: boolean; room: boolean; cohort: boolean },
-): { sessions: Session[]; step: ResolutionStep } | { reasons: string[] } {
-  const reasons: string[] = [];
-
-  // 1) Reschedule to a completely free slot (resolves any clash type, keeps staff/room).
-  const rc = rescheduleCandidates(session, working);
-  if (rc.length && rc[0].free) {
-    const c = rc[0];
-    return {
-      sessions: applyReschedule(working, session.rowId, c.day, c.startMin, c.endMin),
-      step: {
-        rowId: session.rowId,
-        unitCode: session.unitCode,
-        action: "reschedule",
-        from: `${session.day} ${session.timeRaw}`,
-        to: c.label,
-      },
-    };
-  }
-  reasons.push("No completely free time slot is available for this class in this term.");
-
-  // 2) For lecturer clashes, transfer to an available lecturer.
-  if (kinds.lecturer && session.lecturer !== null) {
-    const tc = transferCandidates(session, working, opts);
-    const best = tc.find((c) => c.available && c.projectedStatus !== "Overloaded") ?? tc.find((c) => c.available);
-    if (best) {
-      return {
-        sessions: applyTransfer(working, session.rowId, best.lecturer),
-        step: {
-          rowId: session.rowId,
-          unitCode: session.unitCode,
-          action: "transfer",
-          from: session.lecturer,
-          to: best.lecturer,
-        },
-      };
-    }
-    reasons.push("No other lecturer is free at this time without exceeding their weekly limit.");
-  }
-
-  // 3) For room clashes, move to a free room that fits.
-  if (kinds.room && session.room !== null && !session.isVirtualRoom && opts.roomRegistry) {
-    const rooms = roomCandidates(session, working, opts.roomRegistry, opts.capacityTolerance ?? 0);
-    const best = rooms.find((r) => r.available && r.fits) ?? rooms.find((r) => r.available);
-    if (best) {
-      return {
-        sessions: applyRoomChange(working, session.rowId, best.room),
-        step: {
-          rowId: session.rowId,
-          unitCode: session.unitCode,
-          action: "room",
-          from: session.room,
-          to: best.room,
-        },
-      };
-    }
-    reasons.push("No free room of adequate capacity is available at this time.");
-  }
-
-  if (kinds.cohort) {
-    reasons.push("The student cohort is already booked elsewhere at every alternative slot tried.");
-  }
-
-  return { reasons };
-}
-
 interface RunOptions {
   lecturer?: string; // limit to conflicts involving this lecturer
   types?: ("lecturer" | "room" | "batch_code")[];
   maxIterations?: number;
+}
+
+const DEFAULT_TYPES: ClashType[] = ["lecturer", "room", "batch_code"];
+
+function requestedTypes(run: RunOptions): ClashType[] {
+  return [...new Set(run.types ?? DEFAULT_TYPES)];
+}
+
+function clashInvolvesLecturer(clash: Clash, lecturer: string): boolean {
+  return (
+    (clash.clashType === "lecturer" && clash.groupValue === lecturer) ||
+    clash.lecturer1 === lecturer ||
+    clash.lecturer2 === lecturer
+  );
+}
+
+function relevantClashes(sessions: Session[], types: ClashType[], lecturer?: string): Clash[] {
+  const clashes = types.flatMap((t) => detectClashes(sessions, t));
+  return lecturer ? clashes.filter((c) => clashInvolvesLecturer(c, lecturer)) : clashes;
+}
+
+function relevantClashCount(sessions: Session[], types: ClashType[], lecturer?: string): number {
+  return relevantClashes(sessions, types, lecturer).length;
+}
+
+function clashTypesByRow(clashes: Clash[]): Map<number, Set<ClashType>> {
+  const out = new Map<number, Set<ClashType>>();
+  for (const clash of clashes) {
+    for (const rowId of [clash.rowId1, clash.rowId2]) {
+      const types = out.get(rowId) ?? new Set<ClashType>();
+      types.add(clash.clashType);
+      out.set(rowId, types);
+    }
+  }
+  return out;
+}
+
+function orderedConflictingSessions(working: Session[], clashes: Clash[]): Session[] {
+  const byId = new Map(working.map((s) => [s.rowId, s]));
+  const seen = new Set<number>();
+  const ordered: Session[] = [];
+  const add = (session: Session | undefined) => {
+    if (!session || seen.has(session.rowId)) return;
+    seen.add(session.rowId);
+    ordered.push(session);
+  };
+
+  for (const clash of clashes) {
+    const a = byId.get(clash.rowId1);
+    const b = byId.get(clash.rowId2);
+    if (!a || !b) continue;
+    const mover = pickMover(a, b);
+    add(mover);
+    add(mover.rowId === a.rowId ? b : a);
+  }
+  return ordered;
+}
+
+function placementLabel(session: Session): string {
+  return `${session.day ?? "this day"} ${session.timeRaw ?? "this time"}`.trim();
+}
+
+function unitLabel(session: Session): string {
+  return session.unitCode ?? "this class";
+}
+
+function tryMonotonicRemedies(
+  working: Session[],
+  session: Session,
+  activeTypes: Set<ClashType>,
+  opts: AutoResolveOptions,
+  beforeCount: number,
+  types: ClashType[],
+  lecturer?: string,
+): { sessions: Session[]; step: ResolutionStep } | null {
+  const improves = (next: Session[]) => relevantClashCount(next, types, lecturer) < beforeCount;
+
+  if (activeTypes.size > 0) {
+    for (const candidate of rescheduleCandidates(session, working).filter((c) => c.free)) {
+      const next = applyReschedule(working, session.rowId, candidate.day, candidate.startMin, candidate.endMin);
+      if (improves(next)) {
+        return {
+          sessions: next,
+          step: {
+            rowId: session.rowId,
+            unitCode: session.unitCode,
+            action: "reschedule",
+            from: placementLabel(session),
+            to: candidate.label,
+          },
+        };
+      }
+    }
+  }
+
+  if (activeTypes.has("lecturer") && session.lecturer !== null) {
+    const candidates = transferCandidates(session, working, opts);
+    const ordered = [
+      ...candidates.filter((c) => c.available && c.projectedStatus !== "Overloaded"),
+      ...candidates.filter((c) => c.available && c.projectedStatus === "Overloaded"),
+    ];
+    for (const candidate of ordered) {
+      const next = applyTransfer(working, session.rowId, candidate.lecturer);
+      if (improves(next)) {
+        return {
+          sessions: next,
+          step: {
+            rowId: session.rowId,
+            unitCode: session.unitCode,
+            action: "transfer",
+            from: session.lecturer,
+            to: candidate.lecturer,
+          },
+        };
+      }
+    }
+  }
+
+  if (activeTypes.has("room") && session.room !== null && !session.isVirtualRoom && opts.roomRegistry) {
+    const candidates = roomCandidates(session, working, opts.roomRegistry, opts.capacityTolerance ?? 0);
+    const ordered = candidates.filter((c) => c.available && c.fits);
+    for (const candidate of ordered) {
+      const next = applyRoomChange(working, session.rowId, candidate.room);
+      if (improves(next)) {
+        return {
+          sessions: next,
+          step: {
+            rowId: session.rowId,
+            unitCode: session.unitCode,
+            action: "room",
+            from: session.room,
+            to: candidate.room,
+          },
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function unresolvedReasons(
+  session: Session,
+  sessions: Session[],
+  opts: AutoResolveOptions,
+  activeTypes: Set<ClashType>,
+): string[] {
+  const reasons: string[] = [];
+  const freeSlots = rescheduleCandidates(session, sessions).filter((c) => c.free);
+
+  if (freeSlots.length === 0) {
+    if (activeTypes.has("batch_code")) {
+      reasons.push(
+        "The cohort is booked in every alternative slot, so this overlap can't be cleared automatically — split the class or adjust the timetable manually.",
+      );
+    } else {
+      reasons.push(`No free time slot is available to move ${unitLabel(session)} to in this term.`);
+    }
+  } else {
+    reasons.push(`Available time-slot moves for ${unitLabel(session)} do not reduce the selected clash count.`);
+  }
+
+  if (activeTypes.has("lecturer")) {
+    if (session.lecturer === null) {
+      reasons.push(`No lecturer transfer is possible because ${unitLabel(session)} has no assigned lecturer.`);
+    } else {
+      const candidates = transferCandidates(session, sessions, opts);
+      if (!candidates.some((c) => c.available && c.projectedStatus !== "Overloaded")) {
+        reasons.push(`No other lecturer is free at ${placementLabel(session)} without exceeding their weekly limit.`);
+      } else {
+        reasons.push(`Available lecturer transfers at ${placementLabel(session)} do not reduce the selected clash count.`);
+      }
+    }
+  }
+
+  if (activeTypes.has("room")) {
+    if (session.room === null || session.isVirtualRoom) {
+      reasons.push(`No room move is possible because ${unitLabel(session)} has no physical room assigned.`);
+    } else if (!opts.roomRegistry) {
+      reasons.push("No room registry is configured, so a replacement room cannot be chosen automatically.");
+    } else {
+      const candidates = roomCandidates(session, sessions, opts.roomRegistry, opts.capacityTolerance ?? 0);
+      if (!candidates.some((c) => c.available && c.fits)) {
+        reasons.push("No free room with enough capacity is available at this time.");
+      } else {
+        reasons.push("Available room moves do not reduce the selected clash count.");
+      }
+    }
+  }
+
+  return [...new Set(reasons)];
 }
 
 /**
@@ -131,70 +251,46 @@ export function autoResolve(
   opts: AutoResolveOptions,
   run: RunOptions = {},
 ): ResolveResult {
-  const types = run.types ?? ["lecturer", "room", "batch_code"];
-  const kinds = {
-    lecturer: types.includes("lecturer"),
-    room: types.includes("room"),
-    cohort: types.includes("batch_code"),
-  };
+  const types = requestedTypes(run);
   let working = sessions.map((s) => ({ ...s }));
   const steps: ResolutionStep[] = [];
-  const stuck = new Set<number>(); // rowIds we've already failed to relocate
-  const maxIter = run.maxIterations ?? 500;
-
-  const relevant = () => {
-    const cs = types.flatMap((t) => detectClashes(working, t));
-    return run.lecturer
-      ? cs.filter(
-          (c) =>
-            (c.clashType === "lecturer" && c.groupValue === run.lecturer) ||
-            c.lecturer1 === run.lecturer ||
-            c.lecturer2 === run.lecturer,
-        )
-      : cs;
-  };
+  const maxIter = run.maxIterations ?? 1000;
 
   for (let i = 0; i < maxIter; i++) {
-    const clashes = relevant().filter((c) => !stuck.has(c.rowId1) || !stuck.has(c.rowId2));
+    const clashes = relevantClashes(working, types, run.lecturer);
     if (clashes.length === 0) break;
-    const c = clashes[0];
-    const a = working.find((s) => s.rowId === c.rowId1)!;
-    const b = working.find((s) => s.rowId === c.rowId2)!;
-    // Prefer to move a session we haven't marked stuck yet.
-    const order = [pickMover(a, b), a.rowId === pickMover(a, b).rowId ? b : a].filter(
-      (s, idx, arr) => arr.findIndex((x) => x.rowId === s.rowId) === idx,
-    );
+    const beforeCount = clashes.length;
+    const rowTypes = clashTypesByRow(clashes);
     let progressed = false;
-    for (const mover of order) {
-      if (stuck.has(mover.rowId)) continue;
-      const res = relocate(working, mover, opts, kinds);
-      if ("step" in res) {
-        working = res.sessions;
-        steps.push(res.step);
+
+    for (const session of orderedConflictingSessions(working, clashes)) {
+      const activeTypes = rowTypes.get(session.rowId);
+      if (!activeTypes) continue;
+      const result = tryMonotonicRemedies(working, session, activeTypes, opts, beforeCount, types, run.lecturer);
+      if (result) {
+        working = result.sessions;
+        steps.push(result.step);
         progressed = true;
         break;
-      } else {
-        stuck.add(mover.rowId);
       }
     }
-    if (!progressed) {
-      // both sides stuck — leave the loop's stuck set to prevent re-tries
-      stuck.add(c.rowId1);
-      stuck.add(c.rowId2);
-    }
+
+    if (!progressed) break;
   }
 
   // Build unresolved report for any remaining conflicting sessions.
-  const remaining = relevant();
+  const remaining = relevantClashes(working, types, run.lecturer);
+  const rowTypes = clashTypesByRow(remaining);
+  const byId = new Map(working.map((s) => [s.rowId, s]));
   const unresolvedMap = new Map<number, Unresolved>();
-  for (const c of remaining) {
-    for (const rowId of [c.rowId1, c.rowId2]) {
-      const s = working.find((x) => x.rowId === rowId);
-      if (!s) continue;
-      const res = relocate(working, s, opts, kinds);
-      const reasons = "reasons" in res ? res.reasons : ["Still in conflict after resolution."];
-      unresolvedMap.set(rowId, { rowId, unitCode: s.unitCode, reasons });
-    }
+  for (const [rowId, activeTypes] of rowTypes) {
+    const session = byId.get(rowId);
+    if (!session) continue;
+    unresolvedMap.set(rowId, {
+      rowId,
+      unitCode: session.unitCode,
+      reasons: unresolvedReasons(session, working, opts, activeTypes),
+    });
   }
 
   return { sessions: working, steps, unresolved: [...unresolvedMap.values()] };
@@ -208,18 +304,18 @@ export function explainSession(
 ): { canReschedule: boolean; canTransfer: boolean; canMoveRoom: boolean; reasons: string[] } {
   const reasons: string[] = [];
   const canReschedule = rescheduleCandidates(session, sessions).some((c) => c.free);
-  if (!canReschedule) reasons.push("No free time slot to move this class to.");
+  if (!canReschedule) reasons.push(`No free time slot is available to move ${unitLabel(session)} to in this term.`);
 
   const canTransfer =
     session.lecturer !== null && transferCandidates(session, sessions, opts).some((c) => c.available);
   if (session.lecturer !== null && !canTransfer)
-    reasons.push("No other lecturer is available at this time.");
+    reasons.push(`No other lecturer is free at ${placementLabel(session)} without exceeding their weekly limit.`);
 
   const canMoveRoom =
     session.room !== null && !session.isVirtualRoom && !!opts.roomRegistry &&
-    roomCandidates(session, sessions, opts.roomRegistry, opts.capacityTolerance ?? 0).some((r) => r.available);
+    roomCandidates(session, sessions, opts.roomRegistry, opts.capacityTolerance ?? 0).some((r) => r.available && r.fits);
   if (session.room !== null && !session.isVirtualRoom && !canMoveRoom)
-    reasons.push("No free room is available at this time.");
+    reasons.push("No free room with enough capacity is available at this time.");
 
   return { canReschedule, canTransfer, canMoveRoom, reasons };
 }

@@ -12,7 +12,7 @@ import { RoomsPage } from "@/components/pages/rooms";
 import { DataPage } from "@/components/pages/data";
 import { cn } from "@/lib/cn";
 import {
-  CalendarDays, GraduationCap, LayoutDashboard, DoorOpen, Database, Wand2,
+  CalendarDays, GraduationCap, LayoutDashboard, DoorOpen, Database, Wand2, Loader2,
 } from "lucide-react";
 
 type Tab = "overview" | "resolve" | "timetable" | "faculty" | "rooms" | "data";
@@ -90,6 +90,7 @@ function TopNav({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
 
 function Landing() {
   const loadSample = useStore((s) => s.loadSampleFromUrl);
+  const loading = useStore((s) => s.loading);
   return (
     <div className="flex-1 flex items-center justify-center px-6">
       <div className="max-w-lg text-center animate-rise">
@@ -106,12 +107,21 @@ function Landing() {
         </p>
         <button
           type="button"
+          disabled={loading}
           onClick={() => loadSample("/sample/sample_timetable.xlsx")}
-          className="inline-flex items-center gap-2 rounded border border-brass bg-brass px-5 py-2.5 text-white font-medium hover:brightness-110 transition"
+          className="inline-flex items-center gap-2 rounded border border-brass bg-brass px-5 py-2.5 text-white font-medium hover:brightness-110 transition disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          Load the Fall-2026 sample
+          {loading ? (
+            <>
+              <Loader2 size={16} className="animate-spin" /> Reading your timetable…
+            </>
+          ) : (
+            "Load the Fall-2026 sample"
+          )}
         </button>
-        <p className="text-xs text-muted mt-4">…or upload your own CSV / XLSX from the left rail.</p>
+        <p className="text-xs text-muted mt-4">
+          {loading ? "Parsing off the main thread — the page stays responsive." : "…or upload your own CSV / XLSX from the left rail."}
+        </p>
       </div>
     </div>
   );
