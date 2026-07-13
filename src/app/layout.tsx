@@ -24,7 +24,7 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TimetableLite — Scheduling Assistant",
+  title: "Timetable Manager — Scheduling Assistant",
   description:
     "Ingest a timetable, resolve clashes by transferring lecturers, balance workload, and export a clean schedule.",
 };

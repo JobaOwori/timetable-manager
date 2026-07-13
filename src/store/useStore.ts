@@ -44,7 +44,6 @@ interface State {
 
   loadArrayBuffer: (buf: ArrayBuffer, name: string) => Promise<void>;
   loadCsvText: (text: string, name: string) => Promise<void>;
-  loadSampleFromUrl: (url: string) => Promise<void>;
   setActiveTerm: (t: string) => void;
   setRoomRegistry: (r: RoomRegistry) => void;
   setRole: (lecturer: string, role: string) => void;
@@ -153,17 +152,6 @@ export const useStore = create<State>((set, get) => ({
       const msg = e instanceof Error ? e.message : "Failed to read the file.";
       set({ loading: false, loadError: msg });
       toast.error(msg, "Couldn't read file");
-    }
-  },
-
-  loadSampleFromUrl: async (url) => {
-    set({ loading: true, loadError: null });
-    try {
-      const res = await fetch(url);
-      const buf = await res.arrayBuffer();
-      await get().loadArrayBuffer(buf, "sample_timetable.xlsx");
-    } catch (e) {
-      set({ loading: false, loadError: e instanceof Error ? e.message : "Failed to load the sample." });
     }
   },
 

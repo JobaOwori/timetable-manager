@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useStore } from "@/store/useStore";
 import { ConfigRail } from "@/components/config-rail";
 import { useFilteredSessions } from "@/store/selectors";
@@ -13,7 +13,7 @@ import { DataPage } from "@/components/pages/data";
 import { cn } from "@/lib/cn";
 import { Toaster } from "@/components/ui/toaster";
 import {
-  CalendarDays, GraduationCap, LayoutDashboard, DoorOpen, Database, Wand2, Loader2,
+  CalendarDays, GraduationCap, LayoutDashboard, DoorOpen, Database, Wand2, Loader2, Upload,
 } from "lucide-react";
 
 type Tab = "overview" | "resolve" | "timetable" | "faculty" | "rooms" | "data";
@@ -91,8 +91,19 @@ function TopNav({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
 }
 
 function Landing() {
-  const loadSample = useStore((s) => s.loadSampleFromUrl);
+  const loadArrayBuffer = useStore((s) => s.loadArrayBuffer);
+  const loadCsvText = useStore((s) => s.loadCsvText);
   const loading = useStore((s) => s.loading);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const onFile = async (f: File) => {
+    if (f.name.toLowerCase().endsWith(".csv")) {
+      loadCsvText(await f.text(), f.name);
+    } else {
+      loadArrayBuffer(await f.arrayBuffer(), f.name);
+    }
+  };
+
   return (
     <div className="flex-1 flex items-center justify-center px-6">
       <div className="max-w-lg text-center animate-rise">
@@ -100,17 +111,24 @@ function Landing() {
           Vol. I · Registrar&apos;s Office · Est. 2026
         </div>
         <h1 className="font-serif text-5xl font-semibold text-ink mb-3">
-          Timetable<span className="italic text-brass">Lite</span>
+          Timetable <span className="italic text-brass">Manager</span>
         </h1>
         <p className="text-muted mb-6 leading-relaxed">
           An intelligent scheduling assistant — resolve clashes by transferring lecturers,
           balance workload, and export a clean schedule. Everything runs in your browser;
           your data never leaves this device.
         </p>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".csv,.xlsx,.xls"
+          className="hidden"
+          onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
+        />
         <button
           type="button"
           disabled={loading}
-          onClick={() => loadSample("/sample/sample_timetable.xlsx")}
+          onClick={() => fileRef.current?.click()}
           className="inline-flex items-center gap-2 rounded border border-brass bg-brass px-5 py-2.5 text-white font-medium hover:brightness-110 transition disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {loading ? (
@@ -118,11 +136,15 @@ function Landing() {
               <Loader2 size={16} className="animate-spin" /> Reading your timetable…
             </>
           ) : (
-            "Load the Fall-2026 sample"
+            <>
+              <Upload size={16} /> Upload your timetable
+            </>
           )}
         </button>
         <p className="text-xs text-muted mt-4">
-          {loading ? "Parsing off the main thread — the page stays responsive." : "…or upload your own CSV / XLSX from the left rail."}
+          {loading
+            ? "Parsing in your browser — nothing is uploaded to a server."
+            : "Choose a CSV or Excel (.xlsx) file from your computer."}
         </p>
       </div>
     </div>

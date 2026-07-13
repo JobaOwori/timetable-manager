@@ -1,4 +1,4 @@
-// Canonical domain types for TimetableLite.
+// Canonical domain types for Timetable Manager.
 
 export type DayCode = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";
 

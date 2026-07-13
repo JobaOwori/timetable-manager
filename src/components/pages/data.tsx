@@ -74,7 +74,7 @@ export function DataPage() {
           <Button onClick={() => { exportExcel(termSessions, clashes, workload, capacity, quality, `${base}.xlsx`); toast.success(`Downloaded ${base}.xlsx`, "Export ready"); }}>
             <Download size={15} /> Excel workbook
           </Button>
-          <Button onClick={() => { exportPdf(termSessions, summary, clashes, workload, capacity, quality, `TimetableLite — Term ${activeTerm}`, `${base}.pdf`); toast.success(`Downloaded ${base}.pdf`, "Export ready"); }}>
+          <Button onClick={() => { exportPdf(termSessions, summary, clashes, workload, capacity, quality, `Timetable Manager — Term ${activeTerm}`, `${base}.pdf`); toast.success(`Downloaded ${base}.pdf`, "Export ready"); }}>
             <FileText size={15} /> PDF report
           </Button>
         </div>
