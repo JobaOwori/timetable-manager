@@ -8,14 +8,15 @@ import { departmentFor } from "@/lib/departments";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/card";
+import { MasterTimetable } from "@/components/pages/master-timetable";
 import { AlertTriangle } from "lucide-react";
 
-type Layout = "weekly" | "daily" | "department" | "programme" | "lecturer" | "room";
+type Layout = "master" | "weekly" | "daily" | "department" | "programme" | "lecturer" | "room";
 
 export function TimetablePage() {
   const { filtered } = useFilteredSessions();
   const departmentRegistry = useStore((s) => s.departmentRegistry);
-  const [layout, setLayout] = useState<Layout>("weekly");
+  const [layout, setLayout] = useState<Layout>("master");
   const [pick, setPick] = useState("");
 
   const options = useMemo(() => {
@@ -65,7 +66,11 @@ export function TimetablePage() {
       <div className="flex items-end gap-3 flex-wrap">
         <div>
           <h1 className="font-serif text-2xl font-semibold text-ink">Timetable</h1>
-          <p className="text-sm text-muted">Visual weekly grid — clashing slots are highlighted.</p>
+          <p className="text-sm text-muted">
+            {layout === "master"
+              ? "Complete term timetable — real conflicts are flagged red; click one to resolve it."
+              : "Visual weekly grid — parallel classes are grouped by time slot."}
+          </p>
         </div>
         <div className="ml-auto flex items-end gap-2">
           <div>
@@ -77,6 +82,7 @@ export function TimetablePage() {
                 setPick("");
               }}
               options={[
+                { value: "master", label: "Master (all + conflicts)" },
                 { value: "weekly", label: "Weekly (all)" },
                 { value: "daily", label: "By day" },
                 { value: "department", label: "By department" },
@@ -86,7 +92,7 @@ export function TimetablePage() {
               ]}
             />
           </div>
-          {layout !== "weekly" && (
+          {layout !== "weekly" && layout !== "master" && (
             <div>
               <label className="block text-[0.68rem] uppercase tracking-wide text-muted mb-1 capitalize">{layout}</label>
               <Select value={effectivePick} onChange={setPick} options={options.map((o) => ({ value: o, label: o }))} />
@@ -95,7 +101,9 @@ export function TimetablePage() {
         </div>
       </div>
 
-      {grid.slots.length === 0 ? (
+      {layout === "master" ? (
+        <MasterTimetable />
+      ) : grid.slots.length === 0 ? (
         <EmptyState>No scheduled sessions match this view.</EmptyState>
       ) : (
         <Card className="overflow-auto">

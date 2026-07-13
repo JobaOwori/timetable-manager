@@ -30,7 +30,9 @@ export interface TransferCandidate {
   available: boolean;
   conflictReason: string | null;
   teachesSameUnit: boolean;
+  assignedSubject: boolean;
   sameDepartment: boolean;
+  wouldOverload: boolean;
   score: number;
   recommended: boolean;
 }
@@ -53,6 +55,7 @@ export interface CandidateOptions {
   roleMaxHours: RoleMaxHours;
   departmentRegistry: DepartmentRegistry;
   thresholds: Pick<Thresholds, "nearMaxPct" | "farUnderPct">;
+  subjectAssignments?: Record<string, string[]>;
   includeUnavailable?: boolean;
 }
 
@@ -66,7 +69,7 @@ export function transferCandidates(
   sessions: Session[],
   opts: CandidateOptions,
 ): TransferCandidate[] {
-  const { roleRegistry, roleMaxHours, departmentRegistry, thresholds } = opts;
+  const { roleRegistry, roleMaxHours, departmentRegistry, thresholds, subjectAssignments } = opts;
   const sessionHours = session.workloadHours ?? 0;
   const sessionDept = departmentFor(session.programme, departmentRegistry);
 
@@ -82,6 +85,7 @@ export function transferCandidates(
     const { status: projectedStatus } = workloadStatus(
       projectedHours, maxHours, thresholds.nearMaxPct, thresholds.farUnderPct,
     );
+    const wouldOverload = projectedHours > maxHours;
 
     // Availability: no other session for this lecturer overlapping the slot.
     const conflicting = sessions.find(
@@ -89,9 +93,13 @@ export function transferCandidates(
     );
     const available = !conflicting;
     const conflictReason = conflicting
-      ? `Already teaching ${conflicting.unitCode ?? "a class"} at this time`
-      : null;
+      ? `Unavailable — already teaching ${conflicting.unitCode ?? "a class"} at this time`
+      : wouldOverload
+        ? `Would exceed the ${maxHours}h weekly limit for ${role}`
+        : null;
 
+    const assignedSubject =
+      session.unitCode !== null && (subjectAssignments?.[lecturer]?.includes(session.unitCode) ?? false);
     const teachesSameUnit = sessions.some(
       (s) => s.lecturer === lecturer && s.unitCode !== null && s.unitCode === session.unitCode,
     );
@@ -104,10 +112,11 @@ export function transferCandidates(
       );
 
     // Composite score (higher is better). Availability dominates; then capability
-    // (same unit > same dept); then workload headroom; overload is penalized.
+    // (assigned subject > same unit > same dept); then workload headroom; overload penalized.
     let score = 0;
     if (available) score += 1000;
-    if (teachesSameUnit) score += 300;
+    if (assignedSubject) score += 400;
+    else if (teachesSameUnit) score += 300;
     else if (sameDepartment) score += 120;
     if (projectedStatus === "Overloaded") score -= 500;
     else if (projectedStatus === "Balanced") score += 60;
@@ -124,7 +133,9 @@ export function transferCandidates(
       available,
       conflictReason,
       teachesSameUnit,
+      assignedSubject,
       sameDepartment,
+      wouldOverload,
       score: round(score),
       recommended: false,
     };

@@ -30,6 +30,13 @@ import { DEFAULT_PROGRAMME_DEPARTMENT } from "@/lib/departments";
 import { DEFAULT_ROLE, ROLE_MAX_HOURS } from "@/lib/roles";
 import { applyRoomChange, applyReschedule, applyTransfer } from "@/lib/transfer";
 import { finalizeSession } from "@/lib/ingest";
+import {
+  applyFacultyMerge,
+  facultyDedupMap,
+  mergeLecturer,
+  subjectAssignmentsFromSessions,
+} from "@/lib/faculty";
+import { autoResolve, AutoResolveOptions, ResolveResult } from "@/lib/resolve";
 
 interface State {
   fileName: string | null;
@@ -40,6 +47,7 @@ interface State {
   roleRegistry: RoleRegistry;
   roleMaxHours: RoleMaxHours;
   departmentRegistry: DepartmentRegistry;
+  subjectAssignments: Record<string, string[]>; // lecturer -> unit codes
   thresholds: Thresholds;
   activeTerm: string | null;
   terms: string[];
@@ -60,9 +68,14 @@ interface State {
   setDepartment: (programme: string, dept: string) => void;
   setThreshold: <K extends keyof Thresholds>(k: K, v: Thresholds[K]) => void;
   setFilter: (key: "fPrograms" | "fLecturers" | "fRooms" | "fDays" | "fDepartments", v: string[]) => void;
+  assignSubject: (lecturer: string, unitCode: string) => void;
+  unassignSubject: (lecturer: string, unitCode: string) => void;
+  mergeFaculty: (from: string, to: string) => void;
+  dedupeFaculty: () => number;
   transferLecturer: (rowId: number, newLecturer: string) => void;
   changeRoom: (rowId: number, newRoom: string) => void;
   reschedule: (rowId: number, day: DayCode, startMin: number, endMin: number) => void;
+  autoResolve: (opts: AutoResolveOptions, run?: Parameters<typeof autoResolve>[2]) => ResolveResult;
   updateSession: (rowId: number, patch: Partial<Session>) => void;
   resetEdits: () => void;
 }
@@ -112,6 +125,15 @@ function distinctTerms(sessions: Session[]): string[] {
   return [...new Set(sessions.map((s) => s.term).filter((t): t is string => !!t))].sort();
 }
 
+/** Shared post-ingest pipeline: merge duplicate faculty, then seed all registries. */
+function prepare(rawSessions: Session[]) {
+  const sessions = applyFacultyMerge(rawSessions, facultyDedupMap(rawSessions));
+  const { roleRegistry, departmentRegistry } = seedRegistriesFromSessions(sessions);
+  const subjectAssignments = subjectAssignmentsFromSessions(sessions);
+  const terms = distinctTerms(sessions);
+  return { sessions, roleRegistry, departmentRegistry, subjectAssignments, terms };
+}
+
 function ingestWorkbook(wb: XLSX.WorkBook): { sessions: Session[]; roomRegistry: RoomRegistry } {
   const names = sheetNames(wb);
   const ttSheet = guessTimetableSheet(names) ?? names[0];
@@ -135,6 +157,7 @@ export const useStore = create<State>((set, get) => ({
   roleRegistry: {},
   roleMaxHours: loadPersisted().roleMaxHours ?? { ...ROLE_MAX_HOURS },
   departmentRegistry: {},
+  subjectAssignments: {},
   thresholds: loadPersisted().thresholds ?? { ...DEFAULT_THRESHOLDS },
   activeTerm: null,
   terms: [],
@@ -146,9 +169,8 @@ export const useStore = create<State>((set, get) => ({
 
   loadArrayBuffer: (buf, name) => {
     const wb = readWorkbook(buf);
-    const { sessions, roomRegistry } = ingestWorkbook(wb);
-    const { roleRegistry, departmentRegistry } = seedRegistriesFromSessions(sessions);
-    const terms = distinctTerms(sessions);
+    const { sessions: raw, roomRegistry } = ingestWorkbook(wb);
+    const { sessions, roleRegistry, departmentRegistry, subjectAssignments, terms } = prepare(raw);
     set({
       fileName: name,
       loaded: true,
@@ -157,6 +179,7 @@ export const useStore = create<State>((set, get) => ({
       roomRegistry,
       roleRegistry,
       departmentRegistry,
+      subjectAssignments,
       terms,
       activeTerm: terms[0] ?? null,
       fPrograms: [], fLecturers: [], fRooms: [], fDays: [], fDepartments: [],
@@ -167,12 +190,11 @@ export const useStore = create<State>((set, get) => ({
     const table = readCsv(text);
     const mapping = autoMapColumns(table.header);
     const rows = dropBlankRows(table, mapping);
-    const sessions = buildSessions(rows, mapping);
-    const { roleRegistry, departmentRegistry } = seedRegistriesFromSessions(sessions);
-    const terms = distinctTerms(sessions);
+    const raw = buildSessions(rows, mapping);
+    const { sessions, roleRegistry, departmentRegistry, subjectAssignments, terms } = prepare(raw);
     set({
       fileName: name, loaded: true, originalSessions: sessions, sessions,
-      roomRegistry: {}, roleRegistry, departmentRegistry, terms,
+      roomRegistry: {}, roleRegistry, departmentRegistry, subjectAssignments, terms,
       activeTerm: terms[0] ?? null,
       fPrograms: [], fLecturers: [], fRooms: [], fDays: [], fDepartments: [],
     });
@@ -202,12 +224,60 @@ export const useStore = create<State>((set, get) => ({
     }),
   setFilter: (key, v) => set({ [key]: v } as Pick<State, typeof key>),
 
+  assignSubject: (lecturer, unitCode) =>
+    set((s) => {
+      const cur = s.subjectAssignments[lecturer] ?? [];
+      if (cur.includes(unitCode)) return {};
+      return { subjectAssignments: { ...s.subjectAssignments, [lecturer]: [...cur, unitCode].sort() } };
+    }),
+  unassignSubject: (lecturer, unitCode) =>
+    set((s) => {
+      const cur = s.subjectAssignments[lecturer] ?? [];
+      return { subjectAssignments: { ...s.subjectAssignments, [lecturer]: cur.filter((u) => u !== unitCode) } };
+    }),
+  mergeFaculty: (from, to) =>
+    set((s) => {
+      const sessions = mergeLecturer(s.sessions, from, to);
+      const roleRegistry = { ...s.roleRegistry };
+      if (roleRegistry[from] && !roleRegistry[to]) roleRegistry[to] = roleRegistry[from];
+      delete roleRegistry[from];
+      const subjectAssignments = { ...s.subjectAssignments };
+      const merged = [...new Set([...(subjectAssignments[to] ?? []), ...(subjectAssignments[from] ?? [])])].sort();
+      if (merged.length) subjectAssignments[to] = merged;
+      delete subjectAssignments[from];
+      return { sessions, roleRegistry, subjectAssignments };
+    }),
+  dedupeFaculty: () => {
+    const map = facultyDedupMap(get().sessions);
+    const count = Object.keys(map).length;
+    if (count === 0) return 0;
+    set((s) => {
+      const sessions = applyFacultyMerge(s.sessions, map);
+      const roleRegistry = { ...s.roleRegistry };
+      const subjectAssignments = { ...s.subjectAssignments };
+      for (const [from, to] of Object.entries(map)) {
+        if (roleRegistry[from] && !roleRegistry[to]) roleRegistry[to] = roleRegistry[from];
+        delete roleRegistry[from];
+        const merged = [...new Set([...(subjectAssignments[to] ?? []), ...(subjectAssignments[from] ?? [])])].sort();
+        if (merged.length) subjectAssignments[to] = merged;
+        delete subjectAssignments[from];
+      }
+      return { sessions, roleRegistry, subjectAssignments };
+    });
+    return count;
+  },
+
   transferLecturer: (rowId, newLecturer) =>
     set((s) => ({ sessions: applyTransfer(s.sessions, rowId, newLecturer) })),
   changeRoom: (rowId, newRoom) =>
     set((s) => ({ sessions: applyRoomChange(s.sessions, rowId, newRoom) })),
   reschedule: (rowId, day, startMin, endMin) =>
     set((s) => ({ sessions: applyReschedule(s.sessions, rowId, day, startMin, endMin) })),
+  autoResolve: (opts, run) => {
+    const result = autoResolve(get().sessions, opts, run);
+    set({ sessions: result.sessions });
+    return result;
+  },
   updateSession: (rowId, patch) =>
     set((s) => ({
       sessions: s.sessions.map((sess) =>

@@ -65,7 +65,7 @@ describe("transfer", () => {
     const cands = transferCandidates(target, s, { ...opts, includeUnavailable: true });
     const busy = cands.find((c) => c.lecturer === "Dr Busy")!;
     expect(busy.available).toBe(false);
-    expect(busy.conflictReason).toContain("Already teaching");
+    expect(busy.conflictReason).toContain("already teaching");
   });
 
   it("resolves a lecturer clash when the session is transferred to a free lecturer", () => {

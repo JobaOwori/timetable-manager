@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import {
-  AlertTriangle, ArrowRightLeft, CheckCircle2, DoorOpen, User, Users, Clock,
+  ArrowRightLeft, CheckCircle2, DoorOpen, User, Users, Clock, Wand2, Info,
 } from "lucide-react";
 import { useFilteredSessions, useAnalysis } from "@/store/selectors";
 import { useStore } from "@/store/useStore";
@@ -10,25 +10,45 @@ import { Card, EmptyState, SectionTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clash, Session } from "@/lib/types";
-import {
-  transferCandidates, roomCandidates, rescheduleCandidates,
-  UNASSIGN, TransferCandidate, RoomCandidate, RescheduleCandidate,
-} from "@/lib/transfer";
-import { fmtHours } from "@/lib/cn";
+import { ResolutionPanel } from "@/components/resolution-panel";
+import { ResolveResult } from "@/lib/resolve";
 
 type Filter = "all" | "lecturer" | "room" | "batch_code";
+
+function useResolveOpts() {
+  const roleRegistry = useStore((s) => s.roleRegistry);
+  const roleMaxHours = useStore((s) => s.roleMaxHours);
+  const departmentRegistry = useStore((s) => s.departmentRegistry);
+  const subjectAssignments = useStore((s) => s.subjectAssignments);
+  const thresholds = useStore((s) => s.thresholds);
+  const roomRegistry = useStore((s) => s.roomRegistry);
+  return useMemo(
+    () => ({
+      roleRegistry, roleMaxHours, departmentRegistry, subjectAssignments, thresholds,
+      roomRegistry, capacityTolerance: thresholds.capacityTolerance,
+    }),
+    [roleRegistry, roleMaxHours, departmentRegistry, subjectAssignments, thresholds, roomRegistry],
+  );
+}
 
 export function ResolvePage() {
   // Detect conflicts over the FULL term, not the sidebar-filtered subset: a room or
   // cohort clash needs both colliding sessions present, and a sidebar filter could
-  // remove the counterpart — hiding a real, unresolved double-booking. Resolve is
-  // about clearing every conflict in the term, so it always sees the whole term.
+  // remove the counterpart — hiding a real, unresolved double-booking.
   const { termSessions } = useFilteredSessions();
   const { clashes, summary } = useAnalysis(termSessions);
+  const autoResolve = useStore((s) => s.autoResolve);
+  const opts = useResolveOpts();
   const [filter, setFilter] = useState<Filter>("all");
+  const [result, setResult] = useState<ResolveResult | null>(null);
 
   const groups = useMemo(() => groupClashes(clashes), [clashes]);
   const shown = filter === "all" ? groups : groups.filter((g) => g.clashType === filter);
+
+  const resolveAll = () => {
+    const types = filter === "all" ? undefined : ([filter] as ("lecturer" | "room" | "batch_code")[]);
+    setResult(autoResolve(opts, { types }));
+  };
 
   const chip = (id: Filter, label: string, n: number) => (
     <button
@@ -49,12 +69,17 @@ export function ResolvePage() {
         <div>
           <h1 className="font-serif text-2xl font-semibold text-ink">Resolve Conflicts</h1>
           <p className="text-sm text-muted mt-0.5 max-w-2xl">
-            Each conflict below can be fixed in place — transfer a session to another lecturer
-            (or room). Candidates are ranked by availability, teaching fit and remaining workload,
-            so you never trade one clash for another.
+            Fix each conflict in place — transfer to another lecturer, move room, or reschedule.
+            Candidates are ranked so you never trade one clash for another. Or let the assistant
+            resolve everything at once and tell you exactly what it couldn&apos;t fix.
           </p>
         </div>
+        <Button variant="primary" onClick={resolveAll} disabled={groups.length === 0}>
+          <Wand2 size={15} /> Auto-resolve {filter === "all" ? "all" : filter}
+        </Button>
       </div>
+
+      {result && <ResolveReport result={result} onDismiss={() => setResult(null)} />}
 
       <div className="flex gap-2 flex-wrap">
         {chip("all", "All", groups.length)}
@@ -79,7 +104,57 @@ export function ResolvePage() {
   );
 }
 
-// ---- grouping ----
+function ResolveReport({ result, onDismiss }: { result: ResolveResult; onDismiss: () => void }) {
+  return (
+    <Card className="p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <SectionTitle className="mb-0 border-0 pb-0">
+          <Wand2 size={14} className="inline mr-1.5 text-brass" />
+          Auto-resolve results
+        </SectionTitle>
+        <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button>
+      </div>
+      <div className="flex flex-wrap gap-2 text-sm">
+        <Badge tone="good">{result.steps.length} changes applied</Badge>
+        {result.unresolved.length > 0 ? (
+          <Badge tone="warn">{result.unresolved.length} still need attention</Badge>
+        ) : (
+          <Badge tone="good">All targeted conflicts cleared</Badge>
+        )}
+      </div>
+
+      {result.steps.length > 0 && (
+        <div className="max-h-40 overflow-auto rounded border border-rule divide-y divide-rule/60">
+          {result.steps.map((s, i) => (
+            <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 text-xs">
+              <Badge tone={s.action === "transfer" ? "info" : s.action === "room" ? "warn" : "brass"}>
+                {s.action}
+              </Badge>
+              <span className="font-mono text-ink">{s.unitCode ?? `#${s.rowId}`}</span>
+              <span className="text-muted truncate">
+                {s.from} <ArrowRightLeft size={10} className="inline mx-0.5" /> {s.to}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {result.unresolved.length > 0 && (
+        <div className="rounded border border-warn/30 bg-warn/10 p-2.5 space-y-1.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-content">
+            <Info size={13} className="text-warn" /> Couldn&apos;t auto-resolve these — here&apos;s why:
+          </div>
+          {result.unresolved.map((u) => (
+            <div key={u.rowId} className="text-xs text-content">
+              <span className="font-mono text-ink">{u.unitCode ?? `#${u.rowId}`}</span>{" "}
+              <span className="text-muted">— {u.reasons.join(" ")}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 interface ConflictGroup {
   key: string;
@@ -116,15 +191,24 @@ const TYPE_META = {
 
 function ConflictCard({ group }: { group: ConflictGroup }) {
   const sessions = useStore((s) => s.sessions);
+  const autoResolve = useStore((s) => s.autoResolve);
+  const opts = useResolveOpts();
   const meta = TYPE_META[group.clashType];
   const rows = group.rowIds
     .map((id) => sessions.find((s) => s.rowId === id))
     .filter((s): s is Session => !!s);
   const [resolvingRow, setResolvingRow] = useState<number | null>(null);
 
+  const resolveGroup = () => {
+    if (group.clashType === "lecturer") autoResolve(opts, { lecturer: group.groupValue, types: ["lecturer"] });
+    else autoResolve(opts, { types: [group.clashType] });
+  };
+
+  if (rows.length < 2) return null; // group already cleared by a prior fix
+
   return (
     <Card className="overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2.5 bg-surface-2/40 border-b border-rule">
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-surface-2/40 border-b border-rule flex-wrap">
         <span className="text-brass">{meta.icon}</span>
         <span className="font-medium text-ink text-sm">{meta.label}</span>
         <Badge tone={meta.tone}>
@@ -133,7 +217,10 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
         <span className="text-xs text-muted flex items-center gap-1">
           <Clock size={12} /> {group.day}
         </span>
-        <span className="ml-auto text-xs text-muted">{rows.length} sessions in conflict</span>
+        <span className="text-xs text-muted">{rows.length} sessions in conflict</span>
+        <Button size="sm" variant="outline" className="ml-auto" onClick={resolveGroup}>
+          <Wand2 size={12} /> Auto-fix this
+        </Button>
       </div>
 
       <div className="divide-y divide-rule/60">
@@ -151,8 +238,6 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
   );
 }
 
-type Remedy = "transfer" | "room" | "reschedule";
-
 function SessionRow({
   session, clashType, open, onToggle,
 }: {
@@ -161,23 +246,10 @@ function SessionRow({
   open: boolean;
   onToggle: () => void;
 }) {
-  // Primary remedy per conflict type: lecturer clash -> transfer; room clash ->
-  // move room; cohort clash -> reschedule (transferring a lecturer or room does
-  // NOT free a double-booked student cohort). Reschedule is offered as an
-  // alternative for the others too.
-  const primary: Remedy = clashType === "room" ? "room" : clashType === "batch_code" ? "reschedule" : "transfer";
-  const [remedy, setRemedy] = useState<Remedy>(primary);
-
-  const remedies: { id: Remedy; label: string }[] = [
-    ...(clashType === "lecturer" ? [{ id: "transfer" as Remedy, label: "Transfer lecturer" }] : []),
-    ...(clashType === "room" ? [{ id: "room" as Remedy, label: "Move room" }] : []),
-    { id: "reschedule" as Remedy, label: "Reschedule" },
-  ];
-
   return (
     <div>
       <div className="flex items-center gap-3 px-4 py-2.5 text-sm">
-        <span className="font-mono text-xs text-muted w-8">#{session.rowId}</span>
+        <span className="font-mono text-xs text-muted w-8 shrink-0">#{session.rowId}</span>
         <div className="flex-1 min-w-0">
           <div className="text-ink truncate">
             <span className="font-medium">{session.unitCode}</span>
@@ -188,236 +260,13 @@ function SessionRow({
             {session.lecturer ?? "TBA"}
           </div>
         </div>
-        <Button
-          size="sm"
-          variant={open ? "primary" : "outline"}
-          onClick={() => {
-            setRemedy(primary);
-            onToggle();
-          }}
-        >
+        <Button size="sm" variant={open ? "primary" : "outline"} onClick={onToggle}>
           <ArrowRightLeft size={13} /> {open ? "Close" : "Fix"}
         </Button>
       </div>
       {open && (
-        <div className="px-4 pb-4 animate-fade space-y-2">
-          {remedies.length > 1 && (
-            <div className="flex gap-1.5">
-              {remedies.map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => setRemedy(r.id)}
-                  className={`rounded px-2.5 py-1 text-xs border transition ${
-                    remedy === r.id ? "bg-ink text-parchment border-ink" : "border-rule text-muted hover:text-ink"
-                  }`}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
-          )}
-          {remedy === "room" && <RoomTransferPanel session={session} onDone={onToggle} />}
-          {remedy === "transfer" && <LecturerTransferPanel session={session} onDone={onToggle} />}
-          {remedy === "reschedule" && <ReschedulePanel session={session} onDone={onToggle} />}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LecturerTransferPanel({ session, onDone }: { session: Session; onDone: () => void }) {
-  const sessions = useStore((s) => s.sessions);
-  const roleRegistry = useStore((s) => s.roleRegistry);
-  const roleMaxHours = useStore((s) => s.roleMaxHours);
-  const departmentRegistry = useStore((s) => s.departmentRegistry);
-  const thresholds = useStore((s) => s.thresholds);
-  const transfer = useStore((s) => s.transferLecturer);
-  const [showAll, setShowAll] = useState(false);
-
-  const candidates = useMemo(
-    () =>
-      transferCandidates(session, sessions, {
-        roleRegistry, roleMaxHours, departmentRegistry, thresholds, includeUnavailable: showAll,
-      }),
-    [session, sessions, roleRegistry, roleMaxHours, departmentRegistry, thresholds, showAll],
-  );
-
-  const doTransfer = (lecturer: string) => {
-    transfer(session.rowId, lecturer);
-    onDone();
-  };
-
-  return (
-    <div className="rounded-card border border-rule bg-parchment/40 p-3">
-      <div className="flex items-center justify-between mb-2">
-        <SectionTitle className="mb-0 border-0 pb-0">
-          Transfer <span className="font-mono">{session.unitCode}</span> to…
-        </SectionTitle>
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-muted flex items-center gap-1">
-            <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
-            show unavailable
-          </label>
-          <Button size="sm" variant="danger" onClick={() => doTransfer(UNASSIGN)}>
-            Unassign (TBA)
-          </Button>
-        </div>
-      </div>
-      {candidates.length === 0 ? (
-        <p className="text-xs text-muted py-2">
-          No free lecturer available at this slot. Try “show unavailable”, unassign, or change the time/room.
-        </p>
-      ) : (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
-          {candidates.slice(0, showAll ? 60 : 12).map((c) => (
-            <CandidateChip key={c.lecturer} c={c} onPick={() => doTransfer(c.lecturer)} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CandidateChip({ c, onPick }: { c: TransferCandidate; onPick: () => void }) {
-  const statusTone = c.projectedStatus === "Overloaded" ? "danger" : c.projectedStatus === "Balanced" ? "good" : "warn";
-  return (
-    <button
-      type="button"
-      onClick={onPick}
-      disabled={!c.available}
-      className={`text-left rounded border p-2.5 transition ${
-        c.available ? "border-rule bg-surface hover:border-brass hover:shadow-sm" : "border-rule/50 bg-surface/40 opacity-60 cursor-not-allowed"
-      } ${c.recommended ? "ring-1 ring-brass" : ""}`}
-    >
-      <div className="flex items-center gap-1.5 mb-1">
-        <span className="font-medium text-sm text-ink truncate flex-1">{c.lecturer}</span>
-        {c.recommended && <Badge tone="brass">Best</Badge>}
-      </div>
-      <div className="flex flex-wrap gap-1 mb-1.5">
-        <Badge tone="neutral">{c.role}</Badge>
-        {c.teachesSameUnit && <Badge tone="good">same unit</Badge>}
-        {!c.teachesSameUnit && c.sameDepartment && <Badge tone="info">same dept</Badge>}
-      </div>
-      <div className="text-[0.7rem] text-muted space-y-0.5">
-        <div className="flex justify-between">
-          <span>Now</span>
-          <span className="font-mono">{fmtHours(c.currentHours)}/{c.maxHours}h</span>
-        </div>
-        <div className="flex justify-between">
-          <span>After</span>
-          <span className="font-mono">
-            {fmtHours(c.projectedHours)}/{c.maxHours}h
-          </span>
-        </div>
-        <div className="pt-0.5">
-          <Badge tone={statusTone as "danger" | "good" | "warn"}>{c.projectedStatus}</Badge>
-        </div>
-        {!c.available && c.conflictReason && (
-          <div className="flex items-center gap-1 text-danger pt-0.5">
-            <AlertTriangle size={11} /> {c.conflictReason}
-          </div>
-        )}
-      </div>
-    </button>
-  );
-}
-
-function RoomTransferPanel({ session, onDone }: { session: Session; onDone: () => void }) {
-  const sessions = useStore((s) => s.sessions);
-  const roomRegistry = useStore((s) => s.roomRegistry);
-  const thresholds = useStore((s) => s.thresholds);
-  const changeRoom = useStore((s) => s.changeRoom);
-
-  const candidates = useMemo(
-    () => roomCandidates(session, sessions, roomRegistry, thresholds.capacityTolerance),
-    [session, sessions, roomRegistry, thresholds.capacityTolerance],
-  );
-
-  const pick = (room: string) => {
-    changeRoom(session.rowId, room);
-    onDone();
-  };
-
-  return (
-    <div className="rounded-card border border-rule bg-parchment/40 p-3">
-      <SectionTitle className="mb-2">
-        Move <span className="font-mono">{session.unitCode}</span> (head count {session.headCount ?? "?"}) to a free room…
-      </SectionTitle>
-      {candidates.length === 0 ? (
-        <p className="text-xs text-muted py-2">No free room available at this slot.</p>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {candidates.slice(0, 24).map((c) => (
-            <RoomChip key={c.room} c={c} onPick={() => pick(c.room)} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RoomChip({ c, onPick }: { c: RoomCandidate; onPick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onPick}
-      className={`rounded border p-2 min-w-[92px] text-left transition bg-surface hover:border-brass hover:shadow-sm ${
-        c.recommended ? "ring-1 ring-brass border-brass" : "border-rule"
-      }`}
-    >
-      <div className="flex items-center gap-1">
-        <span className="font-mono font-semibold text-ink text-sm">{c.room}</span>
-        {c.recommended && <Badge tone="brass">Best</Badge>}
-      </div>
-      <div className="text-[0.7rem] text-muted mt-0.5">
-        cap {c.capacity ?? "?"} {c.fits ? "" : "· tight"}
-      </div>
-    </button>
-  );
-}
-
-function ReschedulePanel({ session, onDone }: { session: Session; onDone: () => void }) {
-  const sessions = useStore((s) => s.sessions);
-  const reschedule = useStore((s) => s.reschedule);
-  const candidates = useMemo(() => rescheduleCandidates(session, sessions), [session, sessions]);
-
-  const pick = (c: RescheduleCandidate) => {
-    reschedule(session.rowId, c.day, c.startMin, c.endMin);
-    onDone();
-  };
-
-  return (
-    <div className="rounded-card border border-rule bg-parchment/40 p-3">
-      <SectionTitle className="mb-2">
-        Reschedule <span className="font-mono">{session.unitCode}</span> to a free slot (no
-        lecturer, room or cohort clash)…
-      </SectionTitle>
-      {candidates.length === 0 ? (
-        <p className="text-xs text-muted py-2">
-          No completely-free slot in this term. Try transferring the lecturer/room instead, or
-          relax a constraint.
-        </p>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {candidates.slice(0, 30).map((c) => (
-            <button
-              key={`${c.day}-${c.startMin}-${c.endMin}`}
-              type="button"
-              onClick={() => pick(c)}
-              className={`rounded border p-2 text-left transition bg-surface hover:border-brass hover:shadow-sm ${
-                c.recommended ? "ring-1 ring-brass border-brass" : "border-rule"
-              }`}
-            >
-              <div className="flex items-center gap-1">
-                <span className="font-mono text-xs font-semibold text-ink">{c.day}</span>
-                {c.recommended && <Badge tone="brass">Best</Badge>}
-              </div>
-              <div className="text-[0.7rem] text-muted mt-0.5">
-                {c.label.replace(`${c.day} `, "")}
-              </div>
-            </button>
-          ))}
+        <div className="px-4 pb-4 animate-fade">
+          <ResolutionPanel session={session} clashType={clashType} onDone={onToggle} />
         </div>
       )}
     </div>
