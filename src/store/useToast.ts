@@ -23,7 +23,7 @@ let seq = 0;
 
 export const useToast = create<ToastState>((set, get) => ({
   toasts: [],
-  push: ({ duration = 4000, ...t }) => {
+  push: ({ duration = 5000, ...t }) => {
     const id = ++seq;
     set((s) => ({ toasts: [...s.toasts.slice(-4), { id, ...t }] })); // keep at most ~5
     if (duration > 0 && typeof window !== "undefined") {
