@@ -167,18 +167,23 @@ function ResolveReport({ result, onDismiss }: { result: ResolveResult; onDismiss
           <div className="px-2.5 py-1.5 text-xs font-medium text-content bg-surface-2/40 border-b border-rule">
             Changes applied ({result.steps.length})
           </div>
-          <div className="max-h-44 overflow-auto divide-y divide-rule/60">
-            {result.steps.map((s, i) => (
-              <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 text-xs">
-                <Badge tone={s.action === "transfer" ? "info" : s.action === "room" ? "warn" : "brass"}>
-                  {s.action}
-                </Badge>
-                <span className="font-mono text-ink">{s.unitCode ?? `#${s.rowId}`}</span>
-                <span className="text-muted truncate">
-                  {s.from} <ArrowRightLeft size={10} className="inline mx-0.5" /> {s.to}
-                </span>
-              </div>
-            ))}
+          <div className="max-h-[26rem] overflow-auto divide-y divide-rule/60">
+            {result.steps.map((s, i) => {
+              const p = stepPhrase(s);
+              return (
+                <div key={i} className="flex items-start gap-2.5 px-3 py-2 text-xs">
+                  <Badge tone={p.tone}>{p.verb}</Badge>
+                  <div className="min-w-0 flex-1 leading-relaxed">
+                    <span className="font-mono font-semibold text-ink">{s.unitCode ?? `#${s.rowId}`}</span>{" "}
+                    <span className="text-muted">
+                      {p.subject} from <span className="text-content font-medium">{p.from}</span>
+                      <ArrowRightLeft size={11} className="inline mx-1 text-brass align-[-1px]" />
+                      <span className="text-content font-medium">{p.to}</span>.
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -215,6 +220,23 @@ interface UnresolvedReasonGroup {
   reason: string;
   units: string[];
   total: number;
+}
+
+/** Human-readable description of one applied change, with the right nouns/verb. */
+function stepPhrase(s: ResolveResult["steps"][number]): {
+  verb: string;
+  subject: string;
+  from: string;
+  to: string;
+  tone: "brass" | "info" | "warn";
+} {
+  if (s.action === "transfer") {
+    return { verb: "Reassigned", subject: "lecturer", from: s.from, to: s.to, tone: "info" };
+  }
+  if (s.action === "room") {
+    return { verb: "Moved room", subject: "venue", from: `room ${s.from}`, to: `room ${s.to}`, tone: "warn" };
+  }
+  return { verb: "Rescheduled", subject: "time slot", from: s.from, to: s.to, tone: "brass" };
 }
 
 function groupUnresolved(unresolved: ResolveResult["unresolved"]): UnresolvedReasonGroup[] {
