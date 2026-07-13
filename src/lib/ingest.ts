@@ -83,8 +83,47 @@ export function sheetNames(wb: XLSX.WorkBook): string[] {
   return wb.SheetNames;
 }
 
+/**
+ * Shrink a worksheet's declared range (`!ref`) to the contiguous block of real
+ * data starting at the top-left. Exported spreadsheets frequently (a) declare a
+ * range spanning ~1,048,576 empty formatted rows and (b) contain a stray cell
+ * far below the data, so a naive bounding box is still enormous and sheet_to_json
+ * spends many seconds iterating phantom cells. We instead detect the real data
+ * extent by walking the populated rows/columns and cutting off at the first large
+ * gap — real timetables are contiguous.
+ */
+function trimSheetRange(ws: XLSX.WorkSheet): void {
+  const rowsSet = new Set<number>();
+  const colsSet = new Set<number>();
+  let minR = Infinity, minC = Infinity;
+  for (const key in ws) {
+    if (key[0] === "!") continue;
+    const cell = XLSX.utils.decode_cell(key);
+    rowsSet.add(cell.r);
+    colsSet.add(cell.c);
+    if (cell.r < minR) minR = cell.r;
+    if (cell.c < minC) minC = cell.c;
+  }
+  if (rowsSet.size === 0) return; // empty sheet
+
+  const GAP = 200; // rows/cols of emptiness that mark the end of the real block
+  const lastContiguous = (values: Set<number>, start: number): number => {
+    const sorted = [...values].sort((a, b) => a - b);
+    let last = sorted[0];
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i] - last > start) break;
+      last = sorted[i];
+    }
+    return last;
+  };
+  const maxR = lastContiguous(rowsSet, GAP);
+  const maxC = lastContiguous(colsSet, GAP);
+  ws["!ref"] = XLSX.utils.encode_range({ s: { r: minR, c: minC }, e: { r: maxR, c: maxC } });
+}
+
 export function readSheet(wb: XLSX.WorkBook, name: string): SheetTable {
   const ws = wb.Sheets[name];
+  trimSheetRange(ws);
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: null });
   const header = rows.length ? Object.keys(rows[0]) : [];
   // Also capture header even for empty-ish first row by reading with header:1
@@ -120,6 +159,7 @@ const SKIP_LABELS = new Set(["TOTAL", "CLASSROOMSEATINGCAPACITIES"]);
 /** Parse a (possibly floor-grouped) room-capacity sheet into { room: capacity }. */
 export function parseRoomRegistry(wb: XLSX.WorkBook, sheetName: string): RoomRegistry {
   const ws = wb.Sheets[sheetName];
+  trimSheetRange(ws);
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: null });
   const registry: RoomRegistry = {};
   let isBlock = false;

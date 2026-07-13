@@ -17,7 +17,7 @@ import { finalizeSession } from "@/lib/ingest";
 import { applyFacultyMerge, facultyDedupMap, mergeLecturer } from "@/lib/faculty";
 import { autoResolve, AutoResolveOptions, ResolveResult } from "@/lib/resolve";
 import { IngestResult } from "@/lib/pipeline";
-import { ingestFileInWorker } from "@/lib/ingest-client";
+import { ingestFile } from "@/lib/ingest-client";
 
 interface State {
   fileName: string | null;
@@ -132,7 +132,7 @@ export const useStore = create<State>((set, get) => ({
   loadArrayBuffer: async (buf, name) => {
     set({ loading: true, loadError: null, fileName: name });
     try {
-      const r = await ingestFileInWorker("xlsx", buf);
+      const r = await ingestFile("xlsx", buf);
       set(applyResult(name, r));
     } catch (e) {
       set({ loading: false, loadError: e instanceof Error ? e.message : "Failed to read the file." });
@@ -142,7 +142,7 @@ export const useStore = create<State>((set, get) => ({
   loadCsvText: async (text, name) => {
     set({ loading: true, loadError: null, fileName: name });
     try {
-      const r = await ingestFileInWorker("csv", text);
+      const r = await ingestFile("csv", text);
       set(applyResult(name, r));
     } catch (e) {
       set({ loading: false, loadError: e instanceof Error ? e.message : "Failed to read the file." });
