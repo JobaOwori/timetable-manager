@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { CheckCircle2, Info, AlertTriangle, XCircle, X } from "lucide-react";
+import { CheckCircle2, Info, AlertTriangle, XCircle, X, RotateCcw } from "lucide-react";
 import { useToast, ToastKind } from "@/store/useToast";
 
 const META: Record<
@@ -39,6 +39,18 @@ export function Toaster() {
             <div className="min-w-0 flex-1 py-3">
               {t.title && <div className="text-[0.95rem] font-semibold text-ink leading-tight">{t.title}</div>}
               <div className="text-sm text-content leading-snug mt-0.5">{t.message}</div>
+              {t.action && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    t.action?.onClick();
+                    dismiss(t.id);
+                  }}
+                  className={`mt-2 inline-flex items-center gap-1 rounded border px-2.5 py-1 text-xs font-semibold ${m.accent} border-current/40 hover:bg-current/10 transition`}
+                >
+                  <RotateCcw size={12} /> {t.action.label}
+                </button>
+              )}
             </div>
             <button
               type="button"

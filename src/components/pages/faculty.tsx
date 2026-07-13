@@ -112,7 +112,10 @@ function DuplicateBanner() {
           onClick={() => {
             const n = dedupeFaculty();
             setMerged(n);
-            toast.success(`Merged ${n} duplicate faculty record${n === 1 ? "" : "s"}.`, "Faculty cleaned");
+            toast.success(`Merged ${n} duplicate faculty record${n === 1 ? "" : "s"}.`, "Faculty cleaned", {
+              action: { label: "Undo", onClick: () => useStore.getState().undo() },
+              duration: 9000,
+            });
           }}
         >
           Merge all duplicates
@@ -242,7 +245,10 @@ function SubjectAssignments({ lecturer, sessions }: { lecturer: string; sessions
               type="button"
               onClick={() => {
                 unassignSubject(lecturer, code);
-                toast.info(`Removed ${code} from ${lecturer}.`);
+                toast.info(`Removed ${code} from ${lecturer}.`, undefined, {
+                  action: { label: "Undo", onClick: () => useStore.getState().undo() },
+                  duration: 9000,
+                });
               }}
               className="text-muted hover:text-danger transition"
               aria-label={`Remove ${code}`}
@@ -265,7 +271,10 @@ function SubjectAssignments({ lecturer, sessions }: { lecturer: string; sessions
           onClick={() => {
             if (add) {
               assignSubject(lecturer, add);
-              toast.success(`Assigned ${add} to ${lecturer}.`, "Subject assigned");
+              toast.success(`Assigned ${add} to ${lecturer}.`, "Subject assigned", {
+                action: { label: "Undo", onClick: () => useStore.getState().undo() },
+                duration: 9000,
+              });
               setAdd("");
             }
           }}

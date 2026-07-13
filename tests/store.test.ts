@@ -107,4 +107,53 @@ describe("store integration", () => {
     expect(new Set(st.sessions.map((s) => s.lecturer)).has("Dr Zed")).toBe(false);
     expect(st.subjectAssignments["Dr Kay"]).toContain("ZZZ");
   });
+
+  it("undo reverts the last change (room, transfer, reschedule)", () => {
+    const row = useStore.getState().sessions.find((s) => s.unitCode === "U1")!;
+    expect(useStore.getState().history.length).toBe(0);
+    useStore.getState().changeRoom(row.rowId, "109");
+    expect(useStore.getState().sessions.find((s) => s.rowId === row.rowId)!.room).toBe("109");
+    expect(useStore.getState().history.length).toBe(1);
+    useStore.getState().undo();
+    expect(useStore.getState().sessions.find((s) => s.rowId === row.rowId)!.room).toBe("101");
+    expect(useStore.getState().history.length).toBe(0);
+  });
+
+  it("undo is multi-level (LIFO) and undoes subject assignments too", () => {
+    const row = useStore.getState().sessions.find((s) => s.unitCode === "U2")!;
+    useStore.getState().transferLecturer(row.rowId, "Dr Zed"); // change 1
+    useStore.getState().assignSubject("Dr Zed", "NEW1"); // change 2
+    expect(useStore.getState().subjectAssignments["Dr Zed"]).toContain("NEW1");
+    useStore.getState().undo(); // reverts change 2
+    expect(useStore.getState().subjectAssignments["Dr Zed"] ?? []).not.toContain("NEW1");
+    expect(useStore.getState().sessions.find((s) => s.rowId === row.rowId)!.lecturer).toBe("Dr Zed");
+    useStore.getState().undo(); // reverts change 1
+    expect(useStore.getState().sessions.find((s) => s.rowId === row.rowId)!.lecturer).toBe("Dr Kay");
+  });
+
+  it("undo restores the timetable after an auto-resolve", () => {
+    const before = useStore.getState().sessions.map((s) => ({ id: s.rowId, room: s.room, day: s.day, lect: s.lecturer }));
+    const opts = {
+      roleRegistry: useStore.getState().roleRegistry,
+      roleMaxHours: useStore.getState().roleMaxHours,
+      departmentRegistry: useStore.getState().departmentRegistry,
+      subjectAssignments: useStore.getState().subjectAssignments,
+      thresholds: { nearMaxPct: 0.85, farUnderPct: 0.4 },
+      roomRegistry: useStore.getState().roomRegistry,
+      capacityTolerance: 20,
+    };
+    const res = useStore.getState().autoResolve(opts, { types: ["lecturer"] });
+    expect(res.steps.length).toBeGreaterThan(0);
+    useStore.getState().undo();
+    const after = useStore.getState().sessions.map((s) => ({ id: s.rowId, room: s.room, day: s.day, lect: s.lecturer }));
+    expect(after).toEqual(before);
+  });
+
+  it("loading a file clears the undo history", () => {
+    useStore.getState().changeRoom(useStore.getState().sessions[0].rowId, "109");
+    expect(useStore.getState().history.length).toBeGreaterThan(0);
+    return useStore.getState().loadCsvText(CSV, "t.csv").then(() => {
+      expect(useStore.getState().history.length).toBe(0);
+    });
+  });
 });

@@ -42,6 +42,8 @@ interface State {
   fDays: string[];
   fDepartments: string[];
 
+  history: Snapshot[]; // undo stack (most recent last)
+
   loadArrayBuffer: (buf: ArrayBuffer, name: string) => Promise<void>;
   loadCsvText: (text: string, name: string) => Promise<void>;
   setActiveTerm: (t: string) => void;
@@ -61,6 +63,28 @@ interface State {
   autoResolve: (opts: AutoResolveOptions, run?: Parameters<typeof autoResolve>[2]) => ResolveResult;
   updateSession: (rowId: number, patch: Partial<Session>) => void;
   resetEdits: () => void;
+  undo: () => void;
+}
+
+interface Snapshot {
+  sessions: Session[];
+  subjectAssignments: Record<string, string[]>;
+  roleRegistry: RoleRegistry;
+}
+
+const HISTORY_MAX = 50;
+
+/** Capture the current undoable slice and append it to the history (capped). */
+function pushSnap(s: {
+  history: Snapshot[];
+  sessions: Session[];
+  subjectAssignments: Record<string, string[]>;
+  roleRegistry: RoleRegistry;
+}): Snapshot[] {
+  return [
+    ...s.history,
+    { sessions: s.sessions, subjectAssignments: s.subjectAssignments, roleRegistry: s.roleRegistry },
+  ].slice(-HISTORY_MAX);
 }
 
 const PERSIST_KEY = "ttlite-config-v1";
@@ -103,6 +127,7 @@ function applyResult(name: string, r: IngestResult) {
     subjectAssignments: r.subjectAssignments,
     terms: r.terms,
     activeTerm: r.terms[0] ?? null,
+    history: [] as Snapshot[],
     fPrograms: [] as string[], fLecturers: [] as string[], fRooms: [] as string[],
     fDays: [] as string[], fDepartments: [] as string[],
   };
@@ -123,6 +148,7 @@ export const useStore = create<State>((set, get) => ({
   thresholds: loadPersisted().thresholds ?? { ...DEFAULT_THRESHOLDS },
   activeTerm: null,
   terms: [],
+  history: [],
   fPrograms: [],
   fLecturers: [],
   fRooms: [],
@@ -177,12 +203,13 @@ export const useStore = create<State>((set, get) => ({
     set((s) => {
       const cur = s.subjectAssignments[lecturer] ?? [];
       if (cur.includes(unitCode)) return {};
-      return { subjectAssignments: { ...s.subjectAssignments, [lecturer]: [...cur, unitCode].sort() } };
+      return { history: pushSnap(s), subjectAssignments: { ...s.subjectAssignments, [lecturer]: [...cur, unitCode].sort() } };
     }),
   unassignSubject: (lecturer, unitCode) =>
     set((s) => {
       const cur = s.subjectAssignments[lecturer] ?? [];
-      return { subjectAssignments: { ...s.subjectAssignments, [lecturer]: cur.filter((u) => u !== unitCode) } };
+      if (!cur.includes(unitCode)) return {};
+      return { history: pushSnap(s), subjectAssignments: { ...s.subjectAssignments, [lecturer]: cur.filter((u) => u !== unitCode) } };
     }),
   mergeFaculty: (from, to) =>
     set((s) => {
@@ -194,7 +221,7 @@ export const useStore = create<State>((set, get) => ({
       const merged = [...new Set([...(subjectAssignments[to] ?? []), ...(subjectAssignments[from] ?? [])])].sort();
       if (merged.length) subjectAssignments[to] = merged;
       delete subjectAssignments[from];
-      return { sessions, roleRegistry, subjectAssignments };
+      return { history: pushSnap(s), sessions, roleRegistry, subjectAssignments };
     }),
   dedupeFaculty: () => {
     const map = facultyDedupMap(get().sessions);
@@ -211,31 +238,47 @@ export const useStore = create<State>((set, get) => ({
         if (merged.length) subjectAssignments[to] = merged;
         delete subjectAssignments[from];
       }
-      return { sessions, roleRegistry, subjectAssignments };
+      return { history: pushSnap(s), sessions, roleRegistry, subjectAssignments };
     });
     return count;
   },
 
   transferLecturer: (rowId, newLecturer) =>
-    set((s) => ({ sessions: applyTransfer(s.sessions, rowId, newLecturer) })),
+    set((s) => ({ history: pushSnap(s), sessions: applyTransfer(s.sessions, rowId, newLecturer) })),
   changeRoom: (rowId, newRoom) =>
-    set((s) => ({ sessions: applyRoomChange(s.sessions, rowId, newRoom) })),
+    set((s) => ({ history: pushSnap(s), sessions: applyRoomChange(s.sessions, rowId, newRoom) })),
   reschedule: (rowId, day, startMin, endMin) =>
-    set((s) => ({ sessions: applyReschedule(s.sessions, rowId, day, startMin, endMin) })),
+    set((s) => ({ history: pushSnap(s), sessions: applyReschedule(s.sessions, rowId, day, startMin, endMin) })),
   autoResolve: (opts, run) => {
     const result = autoResolve(get().sessions, opts, run);
-    set({ sessions: result.sessions });
+    set((s) => ({ history: pushSnap(s), sessions: result.sessions }));
     return result;
   },
   updateSession: (rowId, patch) =>
     set((s) => ({
+      history: pushSnap(s),
       sessions: s.sessions.map((sess) =>
         sess.rowId === rowId ? finalizeSession({ ...sess, ...patch }) : sess,
       ),
     })),
   resetEdits: () =>
     set((s) => {
-      toast.info("Reverted all edits to the originally loaded timetable.");
-      return { sessions: s.originalSessions.map((x) => ({ ...x })) };
+      if (s.history.length === 0 && s.sessions === s.originalSessions) return {};
+      toast.info("Reverted all edits to the originally loaded timetable.", "Timetable reset", {
+        action: { label: "Undo", onClick: () => useStore.getState().undo() },
+        duration: 9000,
+      });
+      return { history: pushSnap(s), sessions: s.originalSessions.map((x) => ({ ...x })) };
+    }),
+  undo: () =>
+    set((s) => {
+      if (s.history.length === 0) return {};
+      const prev = s.history[s.history.length - 1];
+      return {
+        history: s.history.slice(0, -1),
+        sessions: prev.sessions,
+        subjectAssignments: prev.subjectAssignments,
+        roleRegistry: prev.roleRegistry,
+      };
     }),
 }));

@@ -18,17 +18,23 @@ type Filter = "all" | "lecturer" | "room" | "batch_code";
 
 /** Announce the outcome of an auto-resolve run via a toast. */
 function announceResolve(r: ResolveResult) {
+  const undo = {
+    action: { label: "Undo", onClick: () => useStore.getState().undo() },
+    duration: 9000,
+  };
   if (r.steps.length === 0 && r.unresolved.length === 0) {
     toast.info("Nothing to resolve — no conflicts here.");
   } else if (r.unresolved.length === 0) {
     toast.success(
       `Applied ${r.steps.length} change${r.steps.length === 1 ? "" : "s"} — all targeted conflicts cleared.`,
       "Conflicts resolved",
+      r.steps.length > 0 ? undo : undefined,
     );
   } else {
     toast.warn(
       `Applied ${r.steps.length} change${r.steps.length === 1 ? "" : "s"}; ${r.unresolved.length} still need attention.`,
       "Partially resolved",
+      r.steps.length > 0 ? undo : undefined,
     );
   }
 }

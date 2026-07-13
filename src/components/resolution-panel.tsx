@@ -11,6 +11,12 @@ import {
 import { explainSession } from "@/lib/resolve";
 import { toast } from "@/store/useToast";
 import { Badge } from "@/components/ui/badge";
+
+/** Toast options that add a quick "Undo" button and give the user longer to click it. */
+const undoToast = {
+  action: { label: "Undo", onClick: () => useStore.getState().undo() },
+  duration: 9000,
+};
 import { Button } from "@/components/ui/button";
 import { SectionTitle } from "@/components/ui/card";
 import { fmtHours } from "@/lib/cn";
@@ -133,6 +139,7 @@ export function LecturerTransferPanel({ session, onDone }: { session: Session; o
         ? `${session.unitCode ?? "Session"} set to TBA (unassigned).`
         : `${session.unitCode ?? "Session"} reassigned to ${lecturer}.`,
       "Lecturer transferred",
+      undoToast,
     );
     onDone();
   };
@@ -225,7 +232,7 @@ export function RoomTransferPanel({ session, onDone }: { session: Session; onDon
 
   const pick = (room: string) => {
     changeRoom(session.rowId, room);
-    toast.success(`${session.unitCode ?? "Session"} moved to room ${room}.`, "Room changed");
+    toast.success(`${session.unitCode ?? "Session"} moved to room ${room}.`, "Room changed", undoToast);
     onDone();
   };
 
@@ -276,7 +283,7 @@ export function ReschedulePanel({ session, onDone }: { session: Session; onDone:
 
   const pick = (c: RescheduleCandidate) => {
     reschedule(session.rowId, c.day, c.startMin, c.endMin);
-    toast.success(`${session.unitCode ?? "Session"} rescheduled to ${c.label}.`, "Rescheduled");
+    toast.success(`${session.unitCode ?? "Session"} rescheduled to ${c.label}.`, "Rescheduled", undoToast);
     onDone();
   };
 

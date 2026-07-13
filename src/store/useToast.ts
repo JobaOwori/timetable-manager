@@ -6,11 +6,17 @@ import { create } from "zustand";
 
 export type ToastKind = "success" | "info" | "warn" | "error";
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Toast {
   id: number;
   kind: ToastKind;
   title?: string;
   message: string;
+  action?: ToastAction;
 }
 
 interface ToastState {
@@ -34,10 +40,19 @@ export const useToast = create<ToastState>((set, get) => ({
   dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 }));
 
+interface ToastOpts {
+  action?: ToastAction;
+  duration?: number;
+}
+
 /** Convenience API usable from anywhere (components, store actions, handlers). */
 export const toast = {
-  success: (message: string, title?: string) => useToast.getState().push({ kind: "success", message, title }),
-  info: (message: string, title?: string) => useToast.getState().push({ kind: "info", message, title }),
-  warn: (message: string, title?: string) => useToast.getState().push({ kind: "warn", message, title }),
-  error: (message: string, title?: string) => useToast.getState().push({ kind: "error", message, title }),
+  success: (message: string, title?: string, opts?: ToastOpts) =>
+    useToast.getState().push({ kind: "success", message, title, ...opts }),
+  info: (message: string, title?: string, opts?: ToastOpts) =>
+    useToast.getState().push({ kind: "info", message, title, ...opts }),
+  warn: (message: string, title?: string, opts?: ToastOpts) =>
+    useToast.getState().push({ kind: "warn", message, title, ...opts }),
+  error: (message: string, title?: string, opts?: ToastOpts) =>
+    useToast.getState().push({ kind: "error", message, title, ...opts }),
 };

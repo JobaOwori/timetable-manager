@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import {
-  ChevronRight, FileSpreadsheet, RotateCcw, SlidersHorizontal, Upload, Loader2,
+  ChevronRight, FileSpreadsheet, RotateCcw, SlidersHorizontal, Upload, Loader2, Undo2,
 } from "lucide-react";
 import { useStore } from "@/store/useStore";
 import { useFilterOptions } from "@/store/selectors";
@@ -115,6 +115,8 @@ function RailBody() {
   const activeTerm = useStore((s) => s.activeTerm);
   const setActiveTerm = useStore((s) => s.setActiveTerm);
   const resetEdits = useStore((s) => s.resetEdits);
+  const undo = useStore((s) => s.undo);
+  const historyLen = useStore((s) => s.history.length);
 
   return (
     <>
@@ -148,7 +150,16 @@ function RailBody() {
       <RoomsSection />
       <ThresholdsSection />
 
-      <div className="pt-3">
+      <div className="pt-3 space-y-2">
+        <button
+          type="button"
+          onClick={undo}
+          disabled={historyLen === 0}
+          title="Undo the last change (Ctrl/Cmd+Z)"
+          className="w-full flex items-center justify-center gap-1.5 rounded border border-[rgb(201,151,47)]/50 bg-[rgb(201,151,47)]/10 px-3 py-1.5 text-xs text-[rgb(233,226,205)] hover:bg-[rgb(201,151,47)]/20 transition disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <Undo2 size={13} /> Undo last change{historyLen > 0 ? ` (${historyLen})` : ""}
+        </button>
         <button
           type="button"
           onClick={resetEdits}

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useStore } from "@/store/useStore";
+import { toast } from "@/store/useToast";
 import { ConfigRail } from "@/components/config-rail";
 import { useFilteredSessions } from "@/store/selectors";
 import { OverviewPage } from "@/components/pages/overview";
@@ -30,6 +31,24 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 export function AppShell() {
   const loaded = useStore((s) => s.loaded);
   const [tab, setTab] = useState<Tab>("overview");
+
+  // Global Ctrl/Cmd+Z to undo the last change (ignored while typing in a field).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+        const el = document.activeElement;
+        const tag = el?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (el as HTMLElement)?.isContentEditable) return;
+        const st = useStore.getState();
+        if (st.history.length === 0) return;
+        e.preventDefault();
+        st.undo();
+        toast.info("Reverted the last change.", "Undone");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="flex h-screen overflow-hidden">
