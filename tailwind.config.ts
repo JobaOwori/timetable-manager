@@ -41,11 +41,16 @@ const config: Config = {
           "0%": { opacity: "0", transform: "translateY(12px) scale(0.97)" },
           "100%": { opacity: "1", transform: "translateY(0) scale(1)" },
         },
+        "toast-in": {
+          "0%": { opacity: "0", transform: "translateX(16px) scale(0.98)" },
+          "100%": { opacity: "1", transform: "translateX(0) scale(1)" },
+        },
       },
       animation: {
         rise: "rise 0.4s ease both",
         fade: "fade 0.25s ease both",
         "modal-pop": "modal-pop 0.28s cubic-bezier(0.16, 1, 0.3, 1) both",
+        "toast-in": "toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both",
       },
     },
   },

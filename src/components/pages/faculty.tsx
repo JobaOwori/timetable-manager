@@ -17,6 +17,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { GridView } from "@/components/ui/grid-view";
 import { LecturerTransferPanel } from "@/components/resolution-panel";
 import { FacultyAnalytics } from "@/components/faculty-charts";
+import { toast } from "@/store/useToast";
 import { fmtHours } from "@/lib/cn";
 import type { FacultyReportRow } from "@/lib/analysis";
 
@@ -108,7 +109,11 @@ function DuplicateBanner() {
         <Button
           size="sm"
           variant="primary"
-          onClick={() => setMerged(dedupeFaculty())}
+          onClick={() => {
+            const n = dedupeFaculty();
+            setMerged(n);
+            toast.success(`Merged ${n} duplicate faculty record${n === 1 ? "" : "s"}.`, "Faculty cleaned");
+          }}
         >
           Merge all duplicates
         </Button>
@@ -235,7 +240,10 @@ function SubjectAssignments({ lecturer, sessions }: { lecturer: string; sessions
             <span className="font-mono text-ink">{code}</span>
             <button
               type="button"
-              onClick={() => unassignSubject(lecturer, code)}
+              onClick={() => {
+                unassignSubject(lecturer, code);
+                toast.info(`Removed ${code} from ${lecturer}.`);
+              }}
               className="text-muted hover:text-danger transition"
               aria-label={`Remove ${code}`}
             >
@@ -257,6 +265,7 @@ function SubjectAssignments({ lecturer, sessions }: { lecturer: string; sessions
           onClick={() => {
             if (add) {
               assignSubject(lecturer, add);
+              toast.success(`Assigned ${add} to ${lecturer}.`, "Subject assigned");
               setAdd("");
             }
           }}

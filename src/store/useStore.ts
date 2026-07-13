@@ -18,6 +18,7 @@ import { applyFacultyMerge, facultyDedupMap, mergeLecturer } from "@/lib/faculty
 import { autoResolve, AutoResolveOptions, ResolveResult } from "@/lib/resolve";
 import { IngestResult } from "@/lib/pipeline";
 import { ingestFile } from "@/lib/ingest-client";
+import { toast } from "@/store/useToast";
 
 interface State {
   fileName: string | null;
@@ -134,8 +135,11 @@ export const useStore = create<State>((set, get) => ({
     try {
       const r = await ingestFile("xlsx", buf);
       set(applyResult(name, r));
+      toast.success(`Loaded ${r.sessions.length} sessions across ${r.terms.length} term${r.terms.length === 1 ? "" : "s"}.`, "Timetable loaded");
     } catch (e) {
-      set({ loading: false, loadError: e instanceof Error ? e.message : "Failed to read the file." });
+      const msg = e instanceof Error ? e.message : "Failed to read the file.";
+      set({ loading: false, loadError: msg });
+      toast.error(msg, "Couldn't read file");
     }
   },
 
@@ -144,8 +148,11 @@ export const useStore = create<State>((set, get) => ({
     try {
       const r = await ingestFile("csv", text);
       set(applyResult(name, r));
+      toast.success(`Loaded ${r.sessions.length} sessions across ${r.terms.length} term${r.terms.length === 1 ? "" : "s"}.`, "Timetable loaded");
     } catch (e) {
-      set({ loading: false, loadError: e instanceof Error ? e.message : "Failed to read the file." });
+      const msg = e instanceof Error ? e.message : "Failed to read the file.";
+      set({ loading: false, loadError: msg });
+      toast.error(msg, "Couldn't read file");
     }
   },
 
@@ -238,5 +245,9 @@ export const useStore = create<State>((set, get) => ({
         sess.rowId === rowId ? finalizeSession({ ...sess, ...patch }) : sess,
       ),
     })),
-  resetEdits: () => set((s) => ({ sessions: s.originalSessions.map((x) => ({ ...x })) })),
+  resetEdits: () =>
+    set((s) => {
+      toast.info("Reverted all edits to the originally loaded timetable.");
+      return { sessions: s.originalSessions.map((x) => ({ ...x })) };
+    }),
 }));

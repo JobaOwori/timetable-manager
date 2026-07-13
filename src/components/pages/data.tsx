@@ -14,6 +14,7 @@ import { Card, SectionTitle, EmptyState } from "@/components/ui/card";
 import { Button, Select } from "@/components/ui/button";
 import { DataTable, Column } from "@/components/ui/data-table";
 import { QualityIssue } from "@/lib/types";
+import { toast } from "@/store/useToast";
 
 type Report = "faculty" | "room" | "programme";
 
@@ -67,13 +68,13 @@ export function DataPage() {
       <Card className="p-4">
         <SectionTitle>Export</SectionTitle>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => exportCsv(termSessions, `${base}.csv`)}>
+          <Button onClick={() => { exportCsv(termSessions, `${base}.csv`); toast.success(`Downloaded ${base}.csv`, "Export ready"); }}>
             <Table2 size={15} /> Timetable CSV
           </Button>
-          <Button onClick={() => exportExcel(termSessions, clashes, workload, capacity, quality, `${base}.xlsx`)}>
+          <Button onClick={() => { exportExcel(termSessions, clashes, workload, capacity, quality, `${base}.xlsx`); toast.success(`Downloaded ${base}.xlsx`, "Export ready"); }}>
             <Download size={15} /> Excel workbook
           </Button>
-          <Button onClick={() => exportPdf(termSessions, summary, clashes, workload, capacity, quality, `TimetableLite — Term ${activeTerm}`, `${base}.pdf`)}>
+          <Button onClick={() => { exportPdf(termSessions, summary, clashes, workload, capacity, quality, `TimetableLite — Term ${activeTerm}`, `${base}.pdf`); toast.success(`Downloaded ${base}.pdf`, "Export ready"); }}>
             <FileText size={15} /> PDF report
           </Button>
         </div>
@@ -92,8 +93,8 @@ export function DataPage() {
                 { value: "programme", label: "Programme report" },
               ]}
             />
-            <Button size="sm" onClick={() => exportGenericCsv(reportData, `${base}_${report}.csv`)}>CSV</Button>
-            <Button size="sm" onClick={() => exportGenericExcel(`${report} report`, reportData, `${base}_${report}.xlsx`)}>Excel</Button>
+            <Button size="sm" onClick={() => { exportGenericCsv(reportData, `${base}_${report}.csv`); toast.success(`Downloaded ${base}_${report}.csv`, "Export ready"); }}>CSV</Button>
+            <Button size="sm" onClick={() => { exportGenericExcel(`${report} report`, reportData, `${base}_${report}.xlsx`); toast.success(`Downloaded ${base}_${report}.xlsx`, "Export ready"); }}>Excel</Button>
           </div>
         </div>
         <DataTable columns={reportCols} rows={reportData} rowKey={(_, i) => i} empty="No data." dense />

@@ -9,6 +9,7 @@ import {
   UNASSIGN, TransferCandidate, RoomCandidate, RescheduleCandidate,
 } from "@/lib/transfer";
 import { explainSession } from "@/lib/resolve";
+import { toast } from "@/store/useToast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SectionTitle } from "@/components/ui/card";
@@ -127,6 +128,12 @@ export function LecturerTransferPanel({ session, onDone }: { session: Session; o
 
   const doTransfer = (lecturer: string) => {
     transfer(session.rowId, lecturer);
+    toast.success(
+      lecturer === UNASSIGN
+        ? `${session.unitCode ?? "Session"} set to TBA (unassigned).`
+        : `${session.unitCode ?? "Session"} reassigned to ${lecturer}.`,
+      "Lecturer transferred",
+    );
     onDone();
   };
 
@@ -218,6 +225,7 @@ export function RoomTransferPanel({ session, onDone }: { session: Session; onDon
 
   const pick = (room: string) => {
     changeRoom(session.rowId, room);
+    toast.success(`${session.unitCode ?? "Session"} moved to room ${room}.`, "Room changed");
     onDone();
   };
 
@@ -268,6 +276,7 @@ export function ReschedulePanel({ session, onDone }: { session: Session; onDone:
 
   const pick = (c: RescheduleCandidate) => {
     reschedule(session.rowId, c.day, c.startMin, c.endMin);
+    toast.success(`${session.unitCode ?? "Session"} rescheduled to ${c.label}.`, "Rescheduled");
     onDone();
   };
 

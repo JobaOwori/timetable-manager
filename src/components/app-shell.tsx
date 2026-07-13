@@ -11,6 +11,7 @@ import { FacultyPage } from "@/components/pages/faculty";
 import { RoomsPage } from "@/components/pages/rooms";
 import { DataPage } from "@/components/pages/data";
 import { cn } from "@/lib/cn";
+import { Toaster } from "@/components/ui/toaster";
 import {
   CalendarDays, GraduationCap, LayoutDashboard, DoorOpen, Database, Wand2, Loader2,
 } from "lucide-react";
@@ -52,6 +53,7 @@ export function AppShell() {
           <Landing />
         )}
       </main>
+      <Toaster />
     </div>
   );
 }

@@ -12,8 +12,26 @@ import { Button } from "@/components/ui/button";
 import { Clash, Session } from "@/lib/types";
 import { ResolutionPanel } from "@/components/resolution-panel";
 import { ResolveResult } from "@/lib/resolve";
+import { toast } from "@/store/useToast";
 
 type Filter = "all" | "lecturer" | "room" | "batch_code";
+
+/** Announce the outcome of an auto-resolve run via a toast. */
+function announceResolve(r: ResolveResult) {
+  if (r.steps.length === 0 && r.unresolved.length === 0) {
+    toast.info("Nothing to resolve — no conflicts here.");
+  } else if (r.unresolved.length === 0) {
+    toast.success(
+      `Applied ${r.steps.length} change${r.steps.length === 1 ? "" : "s"} — all targeted conflicts cleared.`,
+      "Conflicts resolved",
+    );
+  } else {
+    toast.warn(
+      `Applied ${r.steps.length} change${r.steps.length === 1 ? "" : "s"}; ${r.unresolved.length} still need attention.`,
+      "Partially resolved",
+    );
+  }
+}
 
 function useResolveOpts() {
   const roleRegistry = useStore((s) => s.roleRegistry);
@@ -54,6 +72,7 @@ export function ResolvePage() {
       try {
         const r = autoResolve(opts, { types });
         setResult(r);
+        announceResolve(r);
       } finally {
         setResolving(false);
       }
@@ -263,8 +282,11 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
     setResolvingGroup(true);
     requestAnimationFrame(() => setTimeout(() => {
       try {
-        if (group.clashType === "lecturer") autoResolve(opts, { lecturer: group.groupValue, types: ["lecturer"] });
-        else autoResolve(opts, { types: [group.clashType] });
+        const r =
+          group.clashType === "lecturer"
+            ? autoResolve(opts, { lecturer: group.groupValue, types: ["lecturer"] })
+            : autoResolve(opts, { types: [group.clashType] });
+        announceResolve(r);
       } finally {
         setResolvingGroup(false);
       }
