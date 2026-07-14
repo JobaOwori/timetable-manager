@@ -320,11 +320,15 @@ function TransferHours({ lecturer, sessions }: { lecturer: string; sessions: { r
         Rebalance workload by moving any of {lecturer}&apos;s sessions to a colleague — the assistant
         ranks who&apos;s free and won&apos;t become overloaded.
       </p>
-      <div className="max-h-64 overflow-auto rounded border border-rule divide-y divide-rule/60">
+      <div
+        className={`overflow-auto rounded border border-rule divide-y divide-rule/60 ${
+          openRow !== null ? "max-h-[42rem]" : "max-h-64"
+        }`}
+      >
         {courses.map(([unit, list]) =>
           list.map((s) => (
             <div key={s.rowId}>
-              <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs">
+              <div className="flex items-center gap-2 px-2.5 py-2 text-xs">
                 <span className="font-mono text-ink shrink-0">{unit}</span>
                 <span className="text-muted truncate flex-1 min-w-0">
                   {s.day} · {s.timeRaw} · Rm {s.room ?? "—"}

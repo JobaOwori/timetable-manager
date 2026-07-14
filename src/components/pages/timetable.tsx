@@ -1,15 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useFilteredSessions } from "@/store/selectors";
+import { useFilteredSessions, useFilterOptions } from "@/store/selectors";
 import { useStore } from "@/store/useStore";
 import { buildGrid, CellField } from "@/lib/grid";
 import { departmentFor } from "@/lib/departments";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/card";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { MasterTimetable } from "@/components/pages/master-timetable";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, SlidersHorizontal, X } from "lucide-react";
 
 type Layout = "master" | "weekly" | "daily" | "department" | "programme" | "lecturer" | "room";
 
@@ -101,6 +102,8 @@ export function TimetablePage() {
         </div>
       </div>
 
+      <TimetableFilters />
+
       {layout === "master" ? (
         <MasterTimetable />
       ) : grid.slots.length === 0 ? (
@@ -150,5 +153,52 @@ export function TimetablePage() {
         </Card>
       )}
     </div>
+  );
+}
+
+/** In-context filter bar for the timetable — Department, Programme, Lecturer, Room, Day. */
+function TimetableFilters() {
+  const { programmes, lecturers, rooms, days, departments } = useFilterOptions();
+  const fDepartments = useStore((s) => s.fDepartments);
+  const fPrograms = useStore((s) => s.fPrograms);
+  const fLecturers = useStore((s) => s.fLecturers);
+  const fRooms = useStore((s) => s.fRooms);
+  const fDays = useStore((s) => s.fDays);
+  const setFilter = useStore((s) => s.setFilter);
+
+  const activeCount =
+    fDepartments.length + fPrograms.length + fLecturers.length + fRooms.length + fDays.length;
+
+  const clearAll = () => {
+    setFilter("fDepartments", []);
+    setFilter("fPrograms", []);
+    setFilter("fLecturers", []);
+    setFilter("fRooms", []);
+    setFilter("fDays", []);
+  };
+
+  return (
+    <Card className="p-3.5">
+      <div className="flex items-center gap-2 mb-2.5">
+        <SlidersHorizontal size={14} className="text-brass" />
+        <span className="font-serif uppercase tracking-wide text-xs font-semibold text-ink">Filters</span>
+        {activeCount > 0 && (
+          <button
+            type="button"
+            onClick={clearAll}
+            className="ml-auto inline-flex items-center gap-1 rounded-full border border-rule px-2.5 py-0.5 text-xs text-muted hover:text-ink hover:border-brass transition"
+          >
+            <X size={12} /> Clear {activeCount} filter{activeCount === 1 ? "" : "s"}
+          </button>
+        )}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+        <MultiSelect label="Department" options={departments} value={fDepartments} onChange={(v) => setFilter("fDepartments", v)} />
+        <MultiSelect label="Programme" options={programmes} value={fPrograms} onChange={(v) => setFilter("fPrograms", v)} />
+        <MultiSelect label="Lecturer" options={lecturers} value={fLecturers} onChange={(v) => setFilter("fLecturers", v)} />
+        <MultiSelect label="Room" options={rooms} value={fRooms} onChange={(v) => setFilter("fRooms", v)} />
+        <MultiSelect label="Day" options={days} value={fDays} onChange={(v) => setFilter("fDays", v)} />
+      </div>
+    </Card>
   );
 }

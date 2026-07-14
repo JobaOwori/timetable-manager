@@ -2,13 +2,11 @@
 
 import { useRef, useState } from "react";
 import {
-  ChevronRight, FileSpreadsheet, RotateCcw, SlidersHorizontal, Upload, Loader2, Undo2,
+  ChevronRight, FileSpreadsheet, RotateCcw, Upload, Loader2, Undo2,
 } from "lucide-react";
 import { useStore } from "@/store/useStore";
-import { useFilterOptions } from "@/store/selectors";
 import { ROLE_OPTIONS } from "@/lib/roles";
 import { DEPARTMENT_OPTIONS, DEPARTMENT_LABELS } from "@/lib/departments";
-import { MultiSelect } from "@/components/ui/multi-select";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/cn";
 
@@ -144,7 +142,6 @@ function RailBody() {
         </div>
       </Section>
 
-      <FiltersSection />
       <RolesSection />
       <DepartmentsSection />
       <RoomsSection />
@@ -169,20 +166,6 @@ function RailBody() {
         </button>
       </div>
     </>
-  );
-}
-
-function FiltersSection() {
-  const { programmes, lecturers, rooms, days, departments } = useFilterOptions();
-  const s = useStore();
-  return (
-    <Section title="Filters" icon={<SlidersHorizontal size={13} />}>
-      <MultiSelect label="Department" options={departments} value={s.fDepartments} onChange={(v) => s.setFilter("fDepartments", v)} />
-      <MultiSelect label="Programme" options={programmes} value={s.fPrograms} onChange={(v) => s.setFilter("fPrograms", v)} />
-      <MultiSelect label="Lecturer" options={lecturers} value={s.fLecturers} onChange={(v) => s.setFilter("fLecturers", v)} />
-      <MultiSelect label="Room" options={rooms} value={s.fRooms} onChange={(v) => s.setFilter("fRooms", v)} />
-      <MultiSelect label="Day" options={days} value={s.fDays} onChange={(v) => s.setFilter("fDays", v)} />
-    </Section>
   );
 }
 
