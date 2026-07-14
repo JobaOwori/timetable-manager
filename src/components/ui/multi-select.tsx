@@ -21,11 +21,11 @@ export function MultiSelect({
     onChange(value.includes(opt) ? value.filter((v) => v !== opt) : [...value, opt]);
   return (
     <div className="relative">
-      <label className="block text-[0.68rem] uppercase tracking-wide text-muted mb-1">{label}</label>
+      <label className="block text-[0.68rem] uppercase tracking-wide text-muted mb-1.5">{label}</label>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between gap-2 rounded border border-current/25 bg-black/10 px-2.5 py-1.5 text-sm text-left"
+        className="w-full flex items-center justify-between gap-2 rounded border border-current/25 bg-black/10 px-3 py-2 text-sm text-left"
       >
         <span className="truncate text-current/90">
           {value.length ? `${value.length} selected` : "All"}
@@ -47,18 +47,18 @@ export function MultiSelect({
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute z-20 mt-1 max-h-52 w-full overflow-auto rounded border border-rule bg-surface text-content shadow-lg">
-            {options.length === 0 && <div className="px-2.5 py-2 text-xs text-muted">None</div>}
+          <div className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded border border-rule bg-surface text-content shadow-lg py-1">
+            {options.length === 0 && <div className="px-3 py-2 text-xs text-muted">None</div>}
             {options.map((opt) => (
               <button
                 key={opt}
                 type="button"
                 onClick={() => toggle(opt)}
-                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-sm hover:bg-surface-2/60 text-left"
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-sm hover:bg-surface-2/60 text-left"
               >
                 <span
                   className={cn(
-                    "flex h-3.5 w-3.5 items-center justify-center rounded-sm border",
+                    "flex h-3.5 w-3.5 items-center justify-center rounded-sm border shrink-0",
                     value.includes(opt) ? "bg-brass border-brass text-white" : "border-rule",
                   )}
                 >

@@ -178,21 +178,21 @@ function TimetableFilters() {
   };
 
   return (
-    <Card className="p-3.5">
-      <div className="flex items-center gap-2 mb-2.5">
+    <Card className="p-4 sm:p-5">
+      <div className="flex items-center gap-2 mb-3.5">
         <SlidersHorizontal size={14} className="text-brass" />
         <span className="font-serif uppercase tracking-wide text-xs font-semibold text-ink">Filters</span>
         {activeCount > 0 && (
           <button
             type="button"
             onClick={clearAll}
-            className="ml-auto inline-flex items-center gap-1 rounded-full border border-rule px-2.5 py-0.5 text-xs text-muted hover:text-ink hover:border-brass transition"
+            className="ml-auto inline-flex items-center gap-1 rounded-full border border-rule px-3 py-1 text-xs text-muted hover:text-ink hover:border-brass transition"
           >
             <X size={12} /> Clear {activeCount} filter{activeCount === 1 ? "" : "s"}
           </button>
         )}
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-4 gap-y-3.5">
         <MultiSelect label="Department" options={departments} value={fDepartments} onChange={(v) => setFilter("fDepartments", v)} />
         <MultiSelect label="Programme" options={programmes} value={fPrograms} onChange={(v) => setFilter("fPrograms", v)} />
         <MultiSelect label="Lecturer" options={lecturers} value={fLecturers} onChange={(v) => setFilter("fLecturers", v)} />
