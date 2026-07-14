@@ -23,17 +23,17 @@ function Section({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border-b border-current/15 py-2.5">
+    <div className="border-b border-rule py-2.5">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         className="flex w-full items-center justify-between gap-2 text-left"
       >
-        <span className="flex items-center gap-2 font-serif uppercase tracking-wide text-[0.78rem] font-semibold text-[rgb(217,198,144)]">
+        <span className="flex items-center gap-2 font-serif uppercase tracking-wide text-[0.78rem] font-semibold text-brass">
           {icon}
           {title}
         </span>
-        <ChevronRight size={15} className={cn("opacity-70 transition", open && "rotate-90")} />
+        <ChevronRight size={15} className={cn("text-muted transition", open && "rotate-90")} />
       </button>
       {open && <div className="mt-2.5 space-y-2.5 animate-fade">{children}</div>}
     </div>
@@ -58,17 +58,17 @@ export function ConfigRail() {
   };
 
   return (
-    <aside className="ledger-rail w-[290px] shrink-0 overflow-y-auto px-4 py-4 h-full">
+    <aside className="ledger-rail w-[290px] shrink-0 overflow-y-auto px-4 py-4 h-full text-content">
       <div className="flex items-center justify-between mb-3">
         <div>
-          <div className="font-mono text-[0.6rem] tracking-[0.2em] uppercase text-[rgb(201,151,47)]">
+          <div className="font-mono text-[0.6rem] tracking-[0.2em] uppercase text-brass">
             Registrar&apos;s Office
           </div>
-          <div className="font-serif text-xl font-semibold text-[rgb(233,226,205)]">
-            Timetable <span className="italic text-[rgb(201,151,47)]">Manager</span>
+          <div className="font-serif text-xl font-semibold text-ink">
+            Timetable <span className="italic text-brass">Manager</span>
           </div>
         </div>
-        <ThemeToggle className="text-[rgb(233,226,205)]" />
+        <ThemeToggle className="text-ink" />
       </div>
 
       {/* Load */}
@@ -84,20 +84,20 @@ export function ConfigRail() {
           type="button"
           disabled={loading}
           onClick={() => fileRef.current?.click()}
-          className="w-full flex items-center gap-2 rounded border border-[rgb(201,151,47)]/60 bg-[rgb(201,151,47)]/15 px-3 py-2 text-sm text-[rgb(233,226,205)] hover:bg-[rgb(201,151,47)]/25 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full flex items-center gap-2 rounded border border-brass/60 bg-brass/15 px-3 py-2 text-sm text-ink hover:bg-brass/25 transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Upload size={15} /> Upload timetable (CSV / XLSX)
         </button>
         {loading && (
-          <div className="flex items-center gap-2 text-[0.72rem] text-[rgb(217,198,144)] animate-fade">
+          <div className="flex items-center gap-2 text-[0.72rem] text-brass animate-fade">
             <Loader2 size={13} className="animate-spin" /> Reading {fileName ?? "file"}…
           </div>
         )}
         {loadError && !loading && (
-          <div className="text-[0.7rem] text-red-300 leading-snug">Couldn&apos;t read that file: {loadError}</div>
+          <div className="text-[0.7rem] text-danger leading-snug">Couldn&apos;t read that file: {loadError}</div>
         )}
         {fileName && !loading && (
-          <div className="flex items-center gap-1.5 text-[0.7rem] text-[rgb(168,155,120)]">
+          <div className="flex items-center gap-1.5 text-[0.7rem] text-muted">
             <FileSpreadsheet size={12} /> {fileName}
           </div>
         )}
@@ -120,7 +120,7 @@ function RailBody() {
     <>
       {/* Active term */}
       <Section title="Active Term" defaultOpen>
-        <p className="text-[0.72rem] text-[rgb(168,155,120)] leading-snug">
+        <p className="text-[0.72rem] text-muted leading-snug">
           Term 1 &amp; Term 2 are fully isolated — clashes and workload never mix.
         </p>
         <div className="flex gap-1.5 flex-wrap">
@@ -132,8 +132,8 @@ function RailBody() {
               className={cn(
                 "rounded-full px-3 py-1 text-sm font-medium border transition",
                 activeTerm === t
-                  ? "bg-[rgb(201,151,47)] border-[rgb(201,151,47)] text-[#14182a]"
-                  : "border-current/30 text-[rgb(233,226,205)] hover:bg-white/5",
+                  ? "bg-brass border-brass text-white"
+                  : "border-rule text-content hover:bg-ink/5",
               )}
             >
               Term {t}
@@ -153,14 +153,14 @@ function RailBody() {
           onClick={undo}
           disabled={historyLen === 0}
           title="Undo the last change (Ctrl/Cmd+Z)"
-          className="w-full flex items-center justify-center gap-1.5 rounded border border-[rgb(201,151,47)]/50 bg-[rgb(201,151,47)]/10 px-3 py-1.5 text-xs text-[rgb(233,226,205)] hover:bg-[rgb(201,151,47)]/20 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          className="w-full flex items-center justify-center gap-1.5 rounded border border-brass/50 bg-brass/10 px-3 py-1.5 text-xs text-ink hover:bg-brass/20 transition disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <Undo2 size={13} /> Undo last change{historyLen > 0 ? ` (${historyLen})` : ""}
         </button>
         <button
           type="button"
           onClick={resetEdits}
-          className="w-full flex items-center justify-center gap-1.5 rounded border border-current/30 px-3 py-1.5 text-xs text-[rgb(233,226,205)] hover:bg-white/5"
+          className="w-full flex items-center justify-center gap-1.5 rounded border border-rule px-3 py-1.5 text-xs text-content hover:bg-ink/5 transition"
         >
           <RotateCcw size={13} /> Reset all edits
         </button>
@@ -177,24 +177,24 @@ function RolesSection() {
   const shown = q ? lecturers.filter((l) => l.toLowerCase().includes(q.toLowerCase())) : lecturers;
   return (
     <Section title="Faculty Roles">
-      <p className="text-[0.72rem] text-[rgb(168,155,120)]">Role drives each lecturer&apos;s weekly-hours cap.</p>
+      <p className="text-[0.72rem] text-muted">Role drives each lecturer&apos;s weekly-hours cap.</p>
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Search lecturer…"
-        className="w-full rounded border border-current/25 bg-black/10 px-2 py-1 text-sm text-[rgb(233,226,205)] placeholder:text-[rgb(168,155,120)]"
+        className="w-full rounded border border-rule bg-surface px-2 py-1 text-sm text-content placeholder:text-muted outline-none focus:border-brass"
       />
       <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
         {shown.map((l) => (
           <div key={l} className="flex items-center gap-1.5">
-            <span className="flex-1 truncate text-[0.78rem] text-[rgb(233,226,205)]" title={l}>{l}</span>
+            <span className="flex-1 truncate text-[0.78rem] text-content" title={l}>{l}</span>
             <select
               value={roleRegistry[l]}
               onChange={(e) => setRole(l, e.target.value)}
-              className="rounded border border-current/25 bg-black/20 px-1 py-0.5 text-[0.72rem] text-[rgb(233,226,205)]"
+              className="rounded border border-rule bg-surface px-1 py-0.5 text-[0.72rem] text-content"
             >
               {ROLE_OPTIONS.map((r) => (
-                <option key={r} value={r} className="text-black">{r}</option>
+                <option key={r} value={r}>{r}</option>
               ))}
             </select>
           </div>
@@ -210,21 +210,21 @@ function DepartmentsSection() {
   const programmes = Object.keys(departmentRegistry).sort();
   return (
     <Section title="Department Map">
-      <p className="text-[0.72rem] text-[rgb(168,155,120)] leading-snug">
+      <p className="text-[0.72rem] text-muted leading-snug">
         {DEPARTMENT_OPTIONS.map((c) => `${c} = ${DEPARTMENT_LABELS[c]}`).join(" · ")}
       </p>
       <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
         {programmes.map((p) => (
           <div key={p} className="flex items-center gap-1.5">
-            <span className="flex-1 truncate text-[0.78rem] text-[rgb(233,226,205)]">{p}</span>
+            <span className="flex-1 truncate text-[0.78rem] text-content">{p}</span>
             <select
               value={departmentRegistry[p]}
               onChange={(e) => setDepartment(p, e.target.value)}
-              className="rounded border border-current/25 bg-black/20 px-1 py-0.5 text-[0.72rem] text-[rgb(233,226,205)]"
+              className="rounded border border-rule bg-surface px-1 py-0.5 text-[0.72rem] text-content"
             >
-              <option value="" className="text-black">—</option>
+              <option value="">—</option>
               {DEPARTMENT_OPTIONS.map((d) => (
-                <option key={d} value={d} className="text-black">{d}</option>
+                <option key={d} value={d}>{d}</option>
               ))}
             </select>
           </div>
@@ -240,22 +240,22 @@ function RoomsSection() {
   const rooms = Object.keys(roomRegistry).sort();
   return (
     <Section title="Room Capacities">
-      <p className="text-[0.72rem] text-[rgb(168,155,120)]">Verified capacities override the sheet value.</p>
+      <p className="text-[0.72rem] text-muted">Verified capacities override the sheet value.</p>
       <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
         {rooms.map((r) => (
           <div key={r} className="flex items-center gap-2">
-            <span className="flex-1 truncate text-[0.78rem] text-[rgb(233,226,205)]">{r}</span>
+            <span className="flex-1 truncate text-[0.78rem] text-content">{r}</span>
             <input
               type="number"
               value={roomRegistry[r]}
               onChange={(e) =>
                 setRoomRegistry({ ...roomRegistry, [r]: Number(e.target.value) })
               }
-              className="w-16 rounded border border-current/25 bg-black/20 px-1 py-0.5 text-[0.72rem] text-right text-[rgb(233,226,205)]"
+              className="w-16 rounded border border-rule bg-surface px-1 py-0.5 text-[0.72rem] text-right text-content"
             />
           </div>
         ))}
-        {rooms.length === 0 && <div className="text-xs text-[rgb(168,155,120)]">No room sheet detected.</div>}
+        {rooms.length === 0 && <div className="text-xs text-muted">No room sheet detected.</div>}
       </div>
     </Section>
   );
@@ -266,14 +266,14 @@ function ThresholdsSection() {
   const setThreshold = useStore((s) => s.setThreshold);
   const Row = ({ label, k, min, max, step = 1 }: { label: string; k: keyof typeof th; min: number; max: number; step?: number }) => (
     <div>
-      <div className="flex justify-between text-[0.72rem] text-[rgb(233,226,205)]">
+      <div className="flex justify-between text-[0.72rem] text-content">
         <span>{label}</span>
-        <span className="font-mono">{th[k]}</span>
+        <span className="font-mono text-muted">{th[k]}</span>
       </div>
       <input
         type="range" min={min} max={max} step={step} value={th[k]}
         onChange={(e) => setThreshold(k, Number(e.target.value))}
-        className="w-full accent-[rgb(201,151,47)]"
+        className="w-full accent-brass"
       />
     </div>
   );

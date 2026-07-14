@@ -49,20 +49,11 @@ body {
   color: #14182a;
 }
 
-/* Sidebar/rail stays a dark ledger index in both themes */
+/* Sidebar/rail: a distinct panel that follows the active light/dark theme. */
 .ledger-rail {
-  --ink: 217 198 144;
-  --content: 233 226 205;
-  --muted: 168 155 120;
-  --surface: 45 63 94;
-  --rule: 217 198 144;
-  --brass: 201 151 47;
-  background: #1b2942;
+  background: rgb(var(--surface-2));
+  border-right: 1px solid rgb(var(--rule));
   color: rgb(var(--content));
-}
-.dark .ledger-rail {
-  background: #0d1020;
-  --surface: 23 26 46;
 }
 
 *::-webkit-scrollbar { width: 9px; height: 9px; }
