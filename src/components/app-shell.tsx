@@ -21,10 +21,10 @@ type Tab = "overview" | "resolve" | "timetable" | "faculty" | "rooms" | "data";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "overview", label: "Overview", icon: <LayoutDashboard size={15} /> },
-  { id: "resolve", label: "Resolve", icon: <Wand2 size={15} /> },
   { id: "timetable", label: "Timetable", icon: <CalendarDays size={15} /> },
   { id: "faculty", label: "Faculty", icon: <GraduationCap size={15} /> },
   { id: "rooms", label: "Rooms", icon: <DoorOpen size={15} /> },
+  { id: "resolve", label: "Resolve", icon: <Wand2 size={15} /> },
   { id: "data", label: "Data & Export", icon: <Database size={15} /> },
 ];
 
