@@ -4,6 +4,7 @@
 
 /* ---- Academic Ledger design tokens (RGB triplets for Tailwind alpha support) ---- */
 :root {
+  color-scheme: light;
   --ink: 27 41 66;
   --parchment: 245 240 227;
   --surface: 251 248 241;
@@ -19,6 +20,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --ink: 238 231 210;
   --parchment: 20 24 42;
   --surface: 28 33 54;

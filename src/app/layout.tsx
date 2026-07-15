@@ -34,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html
       lang="en"
       suppressHydrationWarning
+      style={{ colorScheme: "light" }}
       className={`${fraunces.variable} ${publicSans.variable} ${jetbrains.variable}`}
     >
       <body>
