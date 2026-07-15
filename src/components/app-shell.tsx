@@ -15,6 +15,7 @@ import { cn } from "@/lib/cn";
 import { Toaster } from "@/components/ui/toaster";
 import {
   CalendarDays, GraduationCap, LayoutDashboard, DoorOpen, Database, Wand2, Loader2, Upload,
+  ChevronRight, Pin, PanelLeft,
 } from "lucide-react";
 
 type Tab = "overview" | "resolve" | "timetable" | "faculty" | "rooms" | "data";
@@ -52,7 +53,7 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <ConfigRail />
+      <SideRail />
       <main className="flex-1 flex flex-col overflow-hidden">
         {loaded ? (
           <>
@@ -73,6 +74,56 @@ export function AppShell() {
         )}
       </main>
       <Toaster />
+    </div>
+  );
+}
+
+/**
+ * Collapsible controls sidebar. Stays hidden behind a slim always-visible pull
+ * tab; slides out on hover for a quick peek and can be pinned open with a click
+ * so it doesn't collapse while the user edits filters/roles. Overlays the page
+ * (absolute) so expanding it never reflows the content.
+ */
+function SideRail() {
+  const [hover, setHover] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const open = hover || pinned;
+
+  return (
+    <div
+      className="relative h-full w-6 shrink-0 z-30"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      {/* Persistent pull-out tab */}
+      <button
+        type="button"
+        onClick={() => setPinned((p) => !p)}
+        aria-label={pinned ? "Unpin controls sidebar" : "Open controls sidebar"}
+        aria-expanded={open}
+        title={pinned ? "Click to unpin" : "Hover to peek · click to pin open"}
+        className="absolute inset-y-0 left-0 z-10 flex w-6 flex-col items-center justify-center gap-3 border-r border-rule bg-surface-2 text-muted transition-colors hover:text-brass"
+      >
+        <ChevronRight size={16} className={cn("transition-transform duration-200", open && "rotate-180")} />
+        <span className="[writing-mode:vertical-rl] rotate-180 text-[0.62rem] font-mono uppercase tracking-[0.25em] text-brass/80">
+          Controls
+        </span>
+        {pinned ? (
+          <Pin size={13} className="fill-brass text-brass" />
+        ) : (
+          <PanelLeft size={14} />
+        )}
+      </button>
+
+      {/* Sliding rail — sits just right of the tab, overlays content, no reflow */}
+      <div
+        className={cn(
+          "absolute inset-y-0 left-6 z-20 h-full transition-transform duration-200 ease-out",
+          open ? "translate-x-0 shadow-2xl" : "-translate-x-[calc(100%+1.5rem)] pointer-events-none",
+        )}
+      >
+        <ConfigRail />
+      </div>
     </div>
   );
 }
