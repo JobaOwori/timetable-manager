@@ -61,18 +61,20 @@ describe("analysis", () => {
     expect(detectClashes(s, "lecturer").length).toBe(0);
   });
 
-  it("computes role-based workload status", () => {
+  it("computes FT workload status against the role target", () => {
     const s = makeSessions([
-      base({ Faculty: "Dr Over", Hours: 10, WDAY: "MON" }),
-      base({ Faculty: "Dr Over", Hours: 10, WDAY: "TUE" }),
-      base({ Faculty: "Dr Under", Hours: 2, WDAY: "MON" }),
+      base({ Faculty: "Dr Balanced", Hours: 12, WDAY: "MON" }),
+      base({ Faculty: "Dr Balanced", Hours: 10, WDAY: "TUE" }),
+      base({ Faculty: "Dr Unbalanced", Hours: 2, WDAY: "MON" }),
     ]);
-    const wl = lecturerWorkload(s, { "Dr Over": "AR", "Dr Under": "Lecturer" }, ROLE_MAX_HOURS, { nearMaxPct: 0.85, farUnderPct: 0.4 });
-    const over = wl.find((w) => w.lecturer === "Dr Over")!;
-    const under = wl.find((w) => w.lecturer === "Dr Under")!;
-    expect(over.totalHours).toBe(20);
-    expect(over.status).toBe("Overloaded");
-    expect(under.status).toBe("Close to Maximum");
+    const wl = lecturerWorkload(s, { "Dr Balanced": "Lecturer", "Dr Unbalanced": "Lecturer" }, ROLE_MAX_HOURS, {});
+    const balanced = wl.find((w) => w.lecturer === "Dr Balanced")!;
+    const unbalanced = wl.find((w) => w.lecturer === "Dr Unbalanced")!;
+    expect(balanced.totalHours).toBe(22);
+    expect(balanced.facultyType).toBe("FT");
+    expect(balanced.status).toBe("Balanced");
+    expect(unbalanced.totalHours).toBe(2);
+    expect(unbalanced.status).toBe("Unbalanced");
   });
 
   it("applies capacity tolerance tiers", () => {

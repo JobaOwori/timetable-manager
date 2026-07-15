@@ -76,10 +76,11 @@ describe("real sample integration (parity with Python engine)", () => {
   it("computes workload with all-default Lecturer role", () => {
     const roleReg: RoleRegistry = {};
     for (const l of new Set(sessions.map((s) => s.lecturer).filter(Boolean) as string[])) roleReg[l] = "Lecturer";
-    const wl = lecturerWorkload(sessions, roleReg, ROLE_MAX_HOURS, { nearMaxPct: 0.85, farUnderPct: 0.4 });
-    const overloaded = wl.filter((w) => w.status === "Overloaded").length;
-    expect(overloaded).toBeGreaterThan(5); // Python reported 15 across both terms
+    const wl = lecturerWorkload(sessions, roleReg, ROLE_MAX_HOURS, {});
+    const unbalanced = wl.filter((w) => w.status === "Unbalanced").length;
+    expect(unbalanced).toBeGreaterThan(5);
     expect(wl.every((w) => w.maxHours === 22)).toBe(true);
+    expect(wl.every((w) => w.facultyType === "FT")).toBe(true);
   });
 
   it("computes capacity tiers", () => {

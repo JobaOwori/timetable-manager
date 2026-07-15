@@ -6,22 +6,26 @@ import {
   DayCode,
   DAY_ORDER,
   DepartmentRegistry,
+  FacultyTypeRegistry,
   RoleMaxHours,
   RoleRegistry,
   Session,
   Thresholds,
   WorkloadStatus,
 } from "./types";
-import { DEFAULT_ROLE, maxHoursForRole, workloadStatus } from "./roles";
+import { DEFAULT_ROLE, maxHoursForRole } from "./roles";
+import { facultyTypeOf, workloadStatus } from "./facultyType";
 import { departmentFor } from "./departments";
 import { finalizeSession } from "./ingest";
 import { minutesToLabel } from "./clean";
+import { Placement, ValidateOptions, placementOf, validatePlacement } from "./validate";
 
 export const UNASSIGN = "\u2014 Unassign (TBA) \u2014";
 
 export interface TransferCandidate {
   lecturer: string;
   role: string;
+  facultyType: "FT" | "PT";
   currentHours: number;
   maxHours: number;
   remainingHours: number;
@@ -54,9 +58,22 @@ export interface CandidateOptions {
   roleRegistry: RoleRegistry;
   roleMaxHours: RoleMaxHours;
   departmentRegistry: DepartmentRegistry;
-  thresholds: Pick<Thresholds, "nearMaxPct" | "farUnderPct">;
+  facultyTypeRegistry?: FacultyTypeRegistry;
+  roomRegistry?: Record<string, number>;
+  thresholds: Thresholds;
   subjectAssignments?: Record<string, string[]>;
   includeUnavailable?: boolean;
+}
+
+/** Build ValidateOptions from CandidateOptions (all the rule inputs). */
+function toValidateOpts(opts: CandidateOptions): ValidateOptions {
+  return {
+    roleRegistry: opts.roleRegistry,
+    roleMaxHours: opts.roleMaxHours,
+    facultyTypeRegistry: opts.facultyTypeRegistry,
+    roomRegistry: opts.roomRegistry,
+    thresholds: opts.thresholds,
+  };
 }
 
 /**
@@ -69,9 +86,10 @@ export function transferCandidates(
   sessions: Session[],
   opts: CandidateOptions,
 ): TransferCandidate[] {
-  const { roleRegistry, roleMaxHours, departmentRegistry, thresholds, subjectAssignments } = opts;
+  const { roleRegistry, roleMaxHours, departmentRegistry, facultyTypeRegistry, subjectAssignments } = opts;
   const sessionHours = session.workloadHours ?? 0;
   const sessionDept = departmentFor(session.programme, departmentRegistry);
+  const vopts = toValidateOpts(opts);
 
   const allLecturers = [
     ...new Set(sessions.map((s) => s.lecturer).filter((l): l is string => !!l)),
@@ -80,23 +98,20 @@ export function transferCandidates(
   const candidates: TransferCandidate[] = allLecturers.map((lecturer) => {
     const role = roleRegistry[lecturer] ?? DEFAULT_ROLE;
     const maxHours = maxHoursForRole(role, roleMaxHours);
+    const facultyType = facultyTypeOf(lecturer, facultyTypeRegistry);
     const currentHours = lecturerHoursInTerm(sessions, lecturer, session.term);
     const projectedHours = currentHours + sessionHours;
-    const { status: projectedStatus } = workloadStatus(
-      projectedHours, maxHours, thresholds.nearMaxPct, thresholds.farUnderPct,
-    );
-    const wouldOverload = projectedHours > maxHours;
+    const { status: projectedStatus } = workloadStatus(projectedHours, maxHours, facultyType);
+    const wouldOverload = facultyType === "FT" && projectedHours > maxHours;
 
-    // Availability: no other session for this lecturer overlapping the slot.
-    const conflicting = sessions.find(
-      (s) => s.lecturer === lecturer && s.rowId !== session.rowId && overlaps(s, session),
+    // Availability: reassign to this lecturer at the SAME slot and validate every
+    // rule (double-booking, workload cap, consecutive, max/day, FT Friday block…).
+    const placement: Placement = { ...placementOf(session), lecturer };
+    const errs = validatePlacement(session.rowId, placement, sessions, vopts).filter(
+      (v) => v.severity === "error",
     );
-    const available = !conflicting;
-    const conflictReason = conflicting
-      ? `Unavailable — already teaching ${conflicting.unitCode ?? "a class"} at this time`
-      : wouldOverload
-        ? `Would exceed the ${maxHours}h weekly limit for ${role}`
-        : null;
+    const available = errs.length === 0;
+    const conflictReason = errs[0]?.message ?? null;
 
     const assignedSubject =
       session.unitCode !== null && (subjectAssignments?.[lecturer]?.includes(session.unitCode) ?? false);
@@ -112,19 +127,20 @@ export function transferCandidates(
       );
 
     // Composite score (higher is better). Availability dominates; then capability
-    // (assigned subject > same unit > same dept); then workload headroom; overload penalized.
+    // (assigned subject > same unit > same dept); then workload fit.
     let score = 0;
     if (available) score += 1000;
     if (assignedSubject) score += 400;
     else if (teachesSameUnit) score += 300;
     else if (sameDepartment) score += 120;
-    if (projectedStatus === "Overloaded") score -= 500;
+    if (wouldOverload) score -= 500;
     else if (projectedStatus === "Balanced") score += 60;
-    score += Math.max(0, maxHours - projectedHours) * 4; // reward remaining headroom
+    if (facultyType === "FT") score += Math.max(0, maxHours - projectedHours) * 4; // headroom to target
 
     return {
       lecturer,
       role,
+      facultyType,
       currentHours: round(currentHours),
       maxHours,
       remainingHours: round(maxHours - currentHours),
@@ -144,7 +160,7 @@ export function transferCandidates(
   const filtered = opts.includeUnavailable ? candidates : candidates.filter((c) => c.available);
   filtered.sort((a, b) => b.score - a.score);
   // Mark the single best available, non-overloading candidate as recommended.
-  const best = filtered.find((c) => c.available && c.projectedStatus !== "Overloaded");
+  const best = filtered.find((c) => c.available && !c.wouldOverload);
   if (best) best.recommended = true;
   return filtered;
 }
@@ -240,12 +256,14 @@ export interface RescheduleCandidate {
  * Suggest free (day, time-slot) placements for `session`. Candidate slots are the
  * distinct time slots that already exist in the term's data (so we reuse the
  * institution's real periods), across every day present. A slot is "free" when
- * moving the session there introduces no lecturer, room, or cohort overlap.
+ * moving the session there breaks NO rule — no lecturer/room/cohort double-booking,
+ * no workload/consecutive/max-per-day breach, and it honours the full-time Friday
+ * block and the UG/PG Saturday policy.
  */
 export function rescheduleCandidates(
   session: Session,
   sessions: Session[],
-  opts?: { includeBlocked?: boolean },
+  opts: ValidateOptions & { includeBlocked?: boolean } = {},
 ): RescheduleCandidate[] {
   const termRows = sessions.filter((s) => s.term === session.term);
   // distinct slots (start,end) present in the term
@@ -258,29 +276,11 @@ export function rescheduleCandidates(
   const days = DAY_ORDER.filter((d) => termRows.some((s) => s.day === d));
 
   const probe = (day: DayCode, startMin: number, endMin: number): string | null => {
-    const moved: Session = { ...session, day, startMin, endMin };
-    // lecturer
-    if (session.lecturer !== null) {
-      const c = termRows.find(
-        (s) => s.lecturer === session.lecturer && s.rowId !== session.rowId && overlaps(s, moved),
-      );
-      if (c) return `Lecturer busy (${c.unitCode ?? "class"})`;
-    }
-    // room
-    if (session.room !== null && !session.isVirtualRoom) {
-      const c = termRows.find(
-        (s) => s.room === session.room && !s.isVirtualRoom && s.rowId !== session.rowId && overlaps(s, moved),
-      );
-      if (c) return `Room ${session.room} occupied (${c.unitCode ?? "class"})`;
-    }
-    // cohort
-    if (session.batchCode !== null) {
-      const c = termRows.find(
-        (s) => s.batchCode === session.batchCode && s.rowId !== session.rowId && overlaps(s, moved),
-      );
-      if (c) return `Cohort busy (${c.unitCode ?? "class"})`;
-    }
-    return null;
+    const placement: Placement = { ...placementOf(session), day, startMin, endMin };
+    const errs = validatePlacement(session.rowId, placement, sessions, opts).filter(
+      (v) => v.severity === "error",
+    );
+    return errs.length ? errs[0].message : null;
   };
 
   const candidates: RescheduleCandidate[] = [];

@@ -31,6 +31,7 @@ import {
   facultyDedupMap,
   subjectAssignmentsFromSessions,
 } from "./faculty";
+import { seedFacultyTypes } from "./facultyType";
 import { DEFAULT_PROGRAMME_DEPARTMENT } from "./departments";
 import { DEFAULT_ROLE } from "./roles";
 
@@ -40,6 +41,7 @@ export interface IngestResult {
   roleRegistry: RoleRegistry;
   departmentRegistry: DepartmentRegistry;
   subjectAssignments: Record<string, string[]>;
+  facultyTypeRegistry: Record<string, "FT" | "PT">;
   terms: string[];
 }
 
@@ -65,8 +67,9 @@ function finish(rawSessions: Session[], roomRegistry: RoomRegistry): IngestResul
   const sessions = applyFacultyMerge(rawSessions, facultyDedupMap(rawSessions));
   const { roleRegistry, departmentRegistry } = seedRegistriesFromSessions(sessions);
   const subjectAssignments = subjectAssignmentsFromSessions(sessions);
+  const facultyTypeRegistry = seedFacultyTypes(sessions);
   const terms = distinctTerms(sessions);
-  return { sessions, roomRegistry, roleRegistry, departmentRegistry, subjectAssignments, terms };
+  return { sessions, roomRegistry, roleRegistry, departmentRegistry, subjectAssignments, facultyTypeRegistry, terms };
 }
 
 /** Parse an uploaded .xlsx/.xls ArrayBuffer into a prepared payload. */

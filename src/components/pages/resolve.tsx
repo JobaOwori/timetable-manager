@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import {
-  ArrowRightLeft, CheckCircle2, DoorOpen, User, Users, Clock, Wand2, Info, Loader2,
+  ArrowRightLeft, CheckCircle2, DoorOpen, User, Users, Clock, Wand2, Info, Loader2, ShieldAlert,
 } from "lucide-react";
 import { useFilteredSessions, useAnalysis } from "@/store/selectors";
 import { useStore } from "@/store/useStore";
@@ -11,7 +11,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clash, Session } from "@/lib/types";
 import { ResolutionPanel } from "@/components/resolution-panel";
+import { FacultyTypeBadge } from "@/components/ui/faculty-badge";
 import { ResolveResult } from "@/lib/resolve";
+import { detectRuleViolations } from "@/lib/validate";
+import { facultyTypeOf } from "@/lib/facultyType";
 import { toast } from "@/store/useToast";
 
 type Filter = "all" | "lecturer" | "room" | "batch_code";
@@ -44,14 +47,15 @@ function useResolveOpts() {
   const roleMaxHours = useStore((s) => s.roleMaxHours);
   const departmentRegistry = useStore((s) => s.departmentRegistry);
   const subjectAssignments = useStore((s) => s.subjectAssignments);
+  const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
   const thresholds = useStore((s) => s.thresholds);
   const roomRegistry = useStore((s) => s.roomRegistry);
   return useMemo(
     () => ({
-      roleRegistry, roleMaxHours, departmentRegistry, subjectAssignments, thresholds,
+      roleRegistry, roleMaxHours, departmentRegistry, subjectAssignments, facultyTypeRegistry, thresholds,
       roomRegistry, capacityTolerance: thresholds.capacityTolerance,
     }),
-    [roleRegistry, roleMaxHours, departmentRegistry, subjectAssignments, thresholds, roomRegistry],
+    [roleRegistry, roleMaxHours, departmentRegistry, subjectAssignments, facultyTypeRegistry, thresholds, roomRegistry],
   );
 }
 
@@ -123,6 +127,8 @@ export function ResolvePage() {
       </div>
 
       {result && <ResolveReport result={result} onDismiss={() => setResult(null)} />}
+
+      <PolicyViolations sessions={termSessions} opts={opts} />
 
       <div className="flex gap-2 flex-wrap">
         {chip("all", "All", groups.length)}
@@ -289,9 +295,30 @@ function groupClashes(clashes: Clash[]): ConflictGroup[] {
 }
 
 const TYPE_META = {
-  lecturer: { icon: <User size={15} />, label: "Lecturer double-booking", tone: "danger" as const, noun: "Lecturer" },
-  room: { icon: <DoorOpen size={15} />, label: "Room double-booking", tone: "warn" as const, noun: "Room" },
-  batch_code: { icon: <Users size={15} />, label: "Cohort double-booking", tone: "info" as const, noun: "Cohort" },
+  lecturer: {
+    icon: <User size={15} />,
+    label: "Lecturer double-booking",
+    tone: "danger" as const,
+    noun: "Lecturer",
+    explain: (who: string, day: string) =>
+      `${who} is assigned two or more classes at the same time on ${day} — one person can't teach them all at once. Move a class to a free slot or hand it to a colleague.`,
+  },
+  room: {
+    icon: <DoorOpen size={15} />,
+    label: "Room double-booking",
+    tone: "warn" as const,
+    noun: "Room",
+    explain: (who: string, day: string) =>
+      `Room ${who} is booked by two or more classes at the same time on ${day} — a room only fits one class. Move a class to another free room or a different slot.`,
+  },
+  batch_code: {
+    icon: <Users size={15} />,
+    label: "Cohort double-booking",
+    tone: "info" as const,
+    noun: "Cohort",
+    explain: (who: string, day: string) =>
+      `Cohort ${who} has two or more classes scheduled at the same time on ${day} — the students can't attend both. Reschedule one class to a slot the cohort is free.`,
+  },
 };
 
 function ConflictCard({ group }: { group: ConflictGroup }) {
@@ -348,6 +375,11 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
         </Button>
       </div>
 
+      <div className="flex items-start gap-1.5 px-4 py-2 text-xs text-content bg-surface-2/20 border-b border-rule/60">
+        <Info size={13} className="text-brass mt-0.5 shrink-0" />
+        <span>{meta.explain(group.groupValue, group.day)}</span>
+      </div>
+
       <div className="divide-y divide-rule/60">
         {rows.map((s) => (
           <SessionRow
@@ -371,6 +403,8 @@ function SessionRow({
   open: boolean;
   onToggle: () => void;
 }) {
+  const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
+  const ft = session.lecturer ? facultyTypeOf(session.lecturer, facultyTypeRegistry) : null;
   return (
     <div>
       <div className="flex items-center gap-3 px-4 py-2.5 text-sm">
@@ -380,9 +414,12 @@ function SessionRow({
             <span className="font-medium">{session.unitCode}</span>
             <span className="text-muted"> {session.unitName}</span>
           </div>
-          <div className="text-xs text-muted truncate">
-            {session.programme} · {session.batchCode} · {session.timeRaw} · Rm {session.room ?? "—"} ·{" "}
-            {session.lecturer ?? "TBA"}
+          <div className="text-xs text-muted truncate flex items-center gap-1.5">
+            <span className="truncate">
+              {session.programme} · {session.batchCode} · {session.timeRaw} · Rm {session.room ?? "—"} ·{" "}
+              {session.lecturer ?? "TBA"}
+            </span>
+            {ft && <FacultyTypeBadge type={ft} />}
           </div>
         </div>
         <Button size="sm" variant={open ? "primary" : "outline"} onClick={onToggle}>
@@ -395,5 +432,67 @@ function SessionRow({
         </div>
       )}
     </div>
+  );
+}
+
+const RULE_META: Record<string, { label: string; tone: "danger" | "warn" | "info" }> = {
+  max_per_day: { label: "Too many sessions in a day", tone: "warn" },
+  faculty_rule: { label: "Full-Time Friday 4–6 PM block", tone: "danger" },
+  programme_rule: { label: "Programme day rule (UG≠Sat, PG=Sat)", tone: "info" },
+};
+
+/**
+ * Lists sessions that break an institutional POLICY (not a double-booking):
+ * per-day session cap, the full-time Friday-evening block, and the UG/PG Saturday
+ * rules — each fixable in place (rescheduling only offers compliant slots).
+ */
+function PolicyViolations({
+  sessions,
+  opts,
+}: {
+  sessions: Session[];
+  opts: ReturnType<typeof useResolveOpts>;
+}) {
+  const liveSessions = useStore((s) => s.sessions);
+  const violations = useMemo(() => detectRuleViolations(sessions, opts), [sessions, opts]);
+  const [openRow, setOpenRow] = useState<number | null>(null);
+
+  if (violations.length === 0) return null;
+  const active = openRow !== null ? liveSessions.find((s) => s.rowId === openRow) ?? null : null;
+
+  return (
+    <Card className="overflow-hidden border-warn/40">
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-warn/10 border-b border-warn/30">
+        <ShieldAlert size={15} className="text-warn" />
+        <span className="font-medium text-ink text-sm">Policy rule violations</span>
+        <Badge tone="warn">{violations.length}</Badge>
+        <span className="ml-auto text-xs text-muted">Beyond double-bookings — schedule policy breaches</span>
+      </div>
+      <div className="divide-y divide-rule/60 max-h-72 overflow-auto">
+        {violations.map((v) => (
+          <div key={`${v.rowId}-${v.kind}`}>
+            <div className="flex items-center gap-3 px-4 py-2.5 text-sm">
+              <Badge tone={RULE_META[v.kind].tone}>{RULE_META[v.kind].label}</Badge>
+              <div className="flex-1 min-w-0">
+                <span className="font-mono text-xs text-ink">{v.unitCode ?? `#${v.rowId}`}</span>{" "}
+                <span className="text-xs text-content">{v.message}</span>
+              </div>
+              <Button
+                size="sm"
+                variant={openRow === v.rowId ? "primary" : "outline"}
+                onClick={() => setOpenRow(openRow === v.rowId ? null : v.rowId)}
+              >
+                <ArrowRightLeft size={13} /> {openRow === v.rowId ? "Close" : "Fix"}
+              </Button>
+            </div>
+            {openRow === v.rowId && active && (
+              <div className="px-4 pb-4 animate-fade">
+                <ResolutionPanel session={active} onDone={() => setOpenRow(null)} />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }

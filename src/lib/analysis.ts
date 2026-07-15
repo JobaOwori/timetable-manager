@@ -7,6 +7,8 @@ import {
   ConsecutiveViolation,
   DepartmentRegistry,
   DuplicateGroup,
+  FacultyType,
+  FacultyTypeRegistry,
   QualityIssue,
   RoleMaxHours,
   RoleRegistry,
@@ -16,7 +18,8 @@ import {
   WorkloadRow,
 } from "./types";
 import { formatTimeRange, isBlank, minutesToLabel } from "./clean";
-import { DEFAULT_ROLE, maxHoursForRole, workloadStatus } from "./roles";
+import { DEFAULT_ROLE, maxHoursForRole } from "./roles";
+import { facultyTypeOf, workloadStatus } from "./facultyType";
 import { departmentFor } from "./departments";
 
 function groupBy<T, K extends string | number>(items: T[], key: (t: T) => K): Map<K, T[]> {
@@ -96,7 +99,7 @@ export function lecturerWorkload(
   sessions: Session[],
   roleRegistry: RoleRegistry,
   roleMaxHours: RoleMaxHours,
-  th: Pick<Thresholds, "nearMaxPct" | "farUnderPct">,
+  facultyTypeRegistry: FacultyTypeRegistry,
 ): WorkloadRow[] {
   const valid = sessions.filter((s) => s.lecturer !== null);
   const buckets = groupBy(valid, (s) => `${s.lecturer}||${s.term}`);
@@ -108,7 +111,8 @@ export function lecturerWorkload(
     const units = [...new Set(subs.map((s) => s.unitCode).filter((u): u is string => !!u))].sort();
     const role = roleRegistry[lecturer] ?? DEFAULT_ROLE;
     const maxHours = maxHoursForRole(role, roleMaxHours);
-    const { status, reason } = workloadStatus(totalHours, maxHours, th.nearMaxPct, th.farUnderPct);
+    const facultyType = facultyTypeOf(lecturer, facultyTypeRegistry);
+    const { status, reason } = workloadStatus(totalHours, maxHours, facultyType);
     rows.push({
       lecturer,
       term,
@@ -116,13 +120,14 @@ export function lecturerWorkload(
       sessions: subs.length,
       units: units.join(", "),
       role,
+      facultyType,
       maxHours,
       remainingHours: round(maxHours - totalHours),
       status,
       statusReason: reason,
     });
   }
-  const rank: Record<string, number> = { Overloaded: 0, "Close to Maximum": 1, Balanced: 2 };
+  const rank: Record<string, number> = { Unbalanced: 0, Flexible: 1, Balanced: 2 };
   return rows.sort((a, b) => rank[a.status] - rank[b.status] || b.totalHours - a.totalHours);
 }
 
@@ -304,8 +309,8 @@ export interface Summary {
   roomClashes: number;
   lecturerClashes: number;
   cohortClashes: number;
-  overloadedLecturers: number;
-  closeToMaxLecturers: number;
+  unbalancedLecturers: number;
+  partTimeLecturers: number;
   overCapacitySessions: number;
   withinToleranceSessions: number;
   dataQualityIssues: number;
@@ -327,8 +332,8 @@ export function summaryCounts(
     roomClashes: clashes.filter((c) => c.clashType === "room").length,
     lecturerClashes: clashes.filter((c) => c.clashType === "lecturer").length,
     cohortClashes: clashes.filter((c) => c.clashType === "batch_code").length,
-    overloadedLecturers: workload.filter((w) => w.status === "Overloaded").length,
-    closeToMaxLecturers: workload.filter((w) => w.status === "Close to Maximum").length,
+    unbalancedLecturers: workload.filter((w) => w.status === "Unbalanced").length,
+    partTimeLecturers: workload.filter((w) => w.facultyType === "PT").length,
     overCapacitySessions: capacity.filter((c) => c.capacityStatus === "Over Capacity").length,
     withinToleranceSessions: capacity.filter((c) => c.capacityStatus === "Within Tolerance").length,
     dataQualityIssues: quality.length,
@@ -340,9 +345,9 @@ export function summaryCounts(
 // -------------------- Reports --------------------
 
 export interface FacultyReportRow {
-  lecturer: string; role: string; departments: string; courses: string;
+  lecturer: string; role: string; facultyType: FacultyType; departments: string; courses: string;
   sessions: number; totalHours: number; maxHours: number; remainingHours: number;
-  status: string; clashes: number;
+  status: string; statusReason: string; clashes: number;
 }
 
 export function facultyReport(
@@ -350,7 +355,7 @@ export function facultyReport(
   roleRegistry: RoleRegistry,
   roleMaxHours: RoleMaxHours,
   departmentRegistry: DepartmentRegistry,
-  th: Pick<Thresholds, "nearMaxPct" | "farUnderPct">,
+  facultyTypeRegistry: FacultyTypeRegistry,
 ): FacultyReportRow[] {
   const valid = sessions.filter((s) => s.lecturer !== null);
   const clashes = allClashes(sessions).filter((c) => c.clashType === "lecturer");
@@ -362,8 +367,9 @@ export function facultyReport(
   for (const [lecturer, subs] of buckets) {
     const role = roleRegistry[lecturer] ?? DEFAULT_ROLE;
     const maxHours = maxHoursForRole(role, roleMaxHours);
+    const facultyType = facultyTypeOf(lecturer, facultyTypeRegistry);
     const totalHours = subs.reduce((a, s) => a + (s.workloadHours ?? 0), 0);
-    const { status } = workloadStatus(totalHours, maxHours, th.nearMaxPct, th.farUnderPct);
+    const { status, reason } = workloadStatus(totalHours, maxHours, facultyType);
     const depts = [
       ...new Set(
         subs.map((s) => departmentFor(s.programme, departmentRegistry)).filter((d): d is string => !!d),
@@ -371,7 +377,7 @@ export function facultyReport(
     ].sort();
     const courses = [...new Set(subs.map((s) => s.unitCode).filter((u): u is string => !!u))].sort();
     rows.push({
-      lecturer, role,
+      lecturer, role, facultyType,
       departments: depts.length ? depts.join(", ") : "\u2014",
       courses: courses.join(", "),
       sessions: subs.length,
@@ -379,10 +385,11 @@ export function facultyReport(
       maxHours,
       remainingHours: round(maxHours - totalHours),
       status,
+      statusReason: reason,
       clashes: clashCount.get(lecturer) ?? 0,
     });
   }
-  const rank: Record<string, number> = { Overloaded: 0, "Close to Maximum": 1, Balanced: 2 };
+  const rank: Record<string, number> = { Unbalanced: 0, Flexible: 1, Balanced: 2 };
   return rows.sort((a, b) => rank[a.status] - rank[b.status] || b.totalHours - a.totalHours);
 }
 

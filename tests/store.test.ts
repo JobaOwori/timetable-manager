@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useStore } from "@/store/useStore";
 import { detectClashes } from "@/lib/analysis";
+import { DEFAULT_THRESHOLDS } from "@/lib/types";
 
 // A compact CSV exercised through the real ingest pipeline (dedup + seeding).
 const CSV = [
@@ -35,6 +36,15 @@ describe("store integration", () => {
     expect(lecturers.has("KAY DR")).toBe(false);
   });
 
+  it("seeds every loaded lecturer as full-time", () => {
+    const st = useStore.getState();
+    const lecturers = new Set(st.sessions.map((s) => s.lecturer).filter((l): l is string => !!l));
+    expect(lecturers.size).toBeGreaterThan(0);
+    for (const lecturer of lecturers) {
+      expect(st.facultyTypeRegistry[lecturer]).toBe("FT");
+    }
+  });
+
   it("seeds subject assignments from taught units", () => {
     const st = useStore.getState();
     expect(st.subjectAssignments["Dr Kay"]).toContain("U1");
@@ -47,6 +57,17 @@ describe("store integration", () => {
     expect(useStore.getState().subjectAssignments["Dr Zed"]).toContain("U1");
     useStore.getState().unassignSubject("Dr Zed", "U1");
     expect(useStore.getState().subjectAssignments["Dr Zed"]).not.toContain("U1");
+  });
+
+  it("setFacultyType changes a lecturer type and is undoable", () => {
+    expect(useStore.getState().facultyTypeRegistry["Dr Kay"]).toBe("FT");
+    expect(useStore.getState().history.length).toBe(0);
+    useStore.getState().setFacultyType("Dr Kay", "PT");
+    expect(useStore.getState().facultyTypeRegistry["Dr Kay"]).toBe("PT");
+    expect(useStore.getState().history.length).toBe(1);
+    useStore.getState().undo();
+    expect(useStore.getState().facultyTypeRegistry["Dr Kay"]).toBe("FT");
+    expect(useStore.getState().history.length).toBe(0);
   });
 
   it("transferLecturer reassigns a session and updates clashes reactively", () => {
@@ -80,7 +101,8 @@ describe("store integration", () => {
       roleMaxHours: useStore.getState().roleMaxHours,
       departmentRegistry: useStore.getState().departmentRegistry,
       subjectAssignments: useStore.getState().subjectAssignments,
-      thresholds: { nearMaxPct: 0.85, farUnderPct: 0.4 },
+      facultyTypeRegistry: useStore.getState().facultyTypeRegistry,
+      thresholds: { ...DEFAULT_THRESHOLDS },
       roomRegistry: useStore.getState().roomRegistry,
       capacityTolerance: 20,
     };
@@ -138,7 +160,8 @@ describe("store integration", () => {
       roleMaxHours: useStore.getState().roleMaxHours,
       departmentRegistry: useStore.getState().departmentRegistry,
       subjectAssignments: useStore.getState().subjectAssignments,
-      thresholds: { nearMaxPct: 0.85, farUnderPct: 0.4 },
+      facultyTypeRegistry: useStore.getState().facultyTypeRegistry,
+      thresholds: { ...DEFAULT_THRESHOLDS },
       roomRegistry: useStore.getState().roomRegistry,
       capacityTolerance: 20,
     };

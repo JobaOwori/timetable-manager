@@ -1,25 +1,25 @@
 import { Badge } from "@/components/ui/badge";
 
-const TONE: Record<string, "danger" | "warn" | "good"> = {
-  Overloaded: "danger",
-  "Close to Maximum": "warn",
+const TONE: Record<string, "danger" | "warn" | "good" | "info"> = {
   Balanced: "good",
+  Unbalanced: "danger",
+  Flexible: "info",
   "Over Capacity": "danger",
   "Within Tolerance": "warn",
-  Underutilized: "info" as never,
+  Underutilized: "info",
   OK: "good",
 };
 
 const DOT: Record<string, string> = {
-  Overloaded: "🔴",
-  "Close to Maximum": "🟡",
   Balanced: "🟢",
+  Unbalanced: "🔴",
+  Flexible: "🔵",
 };
 
 export function StatusBadge({ status }: { status: string }) {
   const tone = TONE[status] ?? "neutral";
   return (
-    <Badge tone={tone as "danger" | "warn" | "good"}>
+    <Badge tone={tone as "danger" | "warn" | "good" | "info"}>
       {DOT[status] ? `${DOT[status]} ` : ""}
       {status}
     </Badge>

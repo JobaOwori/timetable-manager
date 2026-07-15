@@ -56,18 +56,19 @@ export function useAnalysis(sessions: Session[]) {
   const roleRegistry = useStore((s) => s.roleRegistry);
   const roleMaxHours = useStore((s) => s.roleMaxHours);
   const roomRegistry = useStore((s) => s.roomRegistry);
+  const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
   const th = useStore((s) => s.thresholds);
 
   return useMemo(() => {
     const clashes = allClashes(sessions);
-    const workload = lecturerWorkload(sessions, roleRegistry, roleMaxHours, th);
+    const workload = lecturerWorkload(sessions, roleRegistry, roleMaxHours, facultyTypeRegistry);
     const capacity = capacityAnalysis(sessions, roomRegistry, th.underutilPct, th.capacityTolerance);
     const quality = dataQualityIssues(sessions);
     const consecutive = consecutiveViolations(sessions, th.maxConsecutiveHours, th.maxGapMinutes);
     const duplicates = duplicateSchedules(sessions);
     const summary = summaryCounts(sessions, clashes, workload, capacity, quality, consecutive, duplicates);
     return { clashes, workload, capacity, quality, consecutive, duplicates, summary };
-  }, [sessions, roleRegistry, roleMaxHours, roomRegistry, th]);
+  }, [sessions, roleRegistry, roleMaxHours, roomRegistry, facultyTypeRegistry, th]);
 }
 
 export function useFilterOptions() {

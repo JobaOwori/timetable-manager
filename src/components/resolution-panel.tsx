@@ -11,6 +11,7 @@ import {
 import { explainSession } from "@/lib/resolve";
 import { toast } from "@/store/useToast";
 import { Badge } from "@/components/ui/badge";
+import { FacultyTypeBadge } from "@/components/ui/faculty-badge";
 
 /** Toast options that add a quick "Undo" button and give the user longer to click it. */
 const undoToast = {
@@ -177,7 +178,7 @@ export function LecturerTransferPanel({ session, onDone }: { session: Session; o
 }
 
 function CandidateChip({ c, onPick }: { c: TransferCandidate; onPick: () => void }) {
-  const statusTone = c.projectedStatus === "Overloaded" ? "danger" : c.projectedStatus === "Balanced" ? "good" : "warn";
+  const statusTone = c.wouldOverload ? "danger" : c.projectedStatus === "Balanced" ? "good" : c.projectedStatus === "Flexible" ? "info" : "warn";
   return (
     <button
       type="button"
@@ -193,6 +194,7 @@ function CandidateChip({ c, onPick }: { c: TransferCandidate; onPick: () => void
       </div>
       <div className="flex flex-wrap gap-1 mb-1.5">
         <Badge tone="neutral">{c.role}</Badge>
+        <FacultyTypeBadge type={c.facultyType} />
         {c.assignedSubject && <Badge tone="good">assigned</Badge>}
         {!c.assignedSubject && c.teachesSameUnit && <Badge tone="good">same unit</Badge>}
         {!c.assignedSubject && !c.teachesSameUnit && c.sameDepartment && <Badge tone="info">same dept</Badge>}
@@ -207,7 +209,7 @@ function CandidateChip({ c, onPick }: { c: TransferCandidate; onPick: () => void
           <span className="font-mono">{fmtHours(c.projectedHours)}/{c.maxHours}h</span>
         </div>
         <div className="pt-0.5">
-          <Badge tone={statusTone as "danger" | "good" | "warn"}>{c.projectedStatus}</Badge>
+          <Badge tone={statusTone as "danger" | "good" | "warn" | "info"}>{c.projectedStatus}</Badge>
         </div>
         {c.conflictReason && (
           <div className="flex items-start gap-1 text-danger pt-0.5">

@@ -7,13 +7,15 @@ import { useStore } from "@/store/useStore";
 import { facultyReport } from "@/lib/analysis";
 import { detectDuplicateFaculty, distinctUnits } from "@/lib/faculty";
 import { buildGrid } from "@/lib/grid";
-import { workloadStatus, maxHoursForRole, DEFAULT_ROLE } from "@/lib/roles";
+import { maxHoursForRole, DEFAULT_ROLE } from "@/lib/roles";
+import { FACULTY_TYPE_LABEL, FACULTY_TYPE_OPTIONS, facultyTypeOf, workloadStatus } from "@/lib/facultyType";
 import { departmentFor } from "@/lib/departments";
 import { Card, SectionTitle, EmptyState } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button, Select } from "@/components/ui/button";
 import { DataTable, Column } from "@/components/ui/data-table";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { FacultyTypeBadge } from "@/components/ui/faculty-badge";
 import { GridView } from "@/components/ui/grid-view";
 import { LecturerTransferPanel } from "@/components/resolution-panel";
 import { FacultyAnalytics } from "@/components/faculty-charts";
@@ -26,16 +28,17 @@ export function FacultyPage() {
   const roleRegistry = useStore((s) => s.roleRegistry);
   const roleMaxHours = useStore((s) => s.roleMaxHours);
   const departmentRegistry = useStore((s) => s.departmentRegistry);
-  const thresholds = useStore((s) => s.thresholds);
+  const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
 
   const report = useMemo(
-    () => facultyReport(filtered, roleRegistry, roleMaxHours, departmentRegistry, thresholds),
-    [filtered, roleRegistry, roleMaxHours, departmentRegistry, thresholds],
+    () => facultyReport(filtered, roleRegistry, roleMaxHours, departmentRegistry, facultyTypeRegistry),
+    [filtered, roleRegistry, roleMaxHours, departmentRegistry, facultyTypeRegistry],
   );
 
   const columns: Column<FacultyReportRow>[] = [
     { key: "lecturer", header: "Lecturer", render: (r) => <span className="font-medium text-ink">{r.lecturer}</span> },
     { key: "role", header: "Role", render: (r) => <Badge tone="neutral">{r.role}</Badge> },
+    { key: "facultyType", header: "Type", render: (r) => <FacultyTypeBadge type={r.facultyType} /> },
     { key: "departments", header: "Dept" },
     { key: "sessions", header: "Sessions", align: "right" },
     {
@@ -43,7 +46,7 @@ export function FacultyPage() {
       header: "Hours / Max",
       align: "right",
       render: (r) => (
-        <span className="font-mono whitespace-nowrap">
+        <span className="font-mono whitespace-nowrap" title={r.statusReason}>
           {fmtHours(r.totalHours)}/{r.maxHours}
         </span>
       ),
@@ -59,14 +62,14 @@ export function FacultyPage() {
       ),
     },
     { key: "clashes", header: "Clashes", align: "right", render: (r) => (r.clashes ? <span className="text-danger font-mono">{r.clashes}</span> : <span className="text-muted">0</span>) },
-    { key: "status", header: "Status", render: (r) => <StatusBadge status={r.status} /> },
+    { key: "status", header: "Status", render: (r) => <span title={r.statusReason}><StatusBadge status={r.status} /></span> },
   ];
 
   return (
     <div className="space-y-5">
       <div>
         <h1 className="font-serif text-2xl font-semibold text-ink">Faculty Workload</h1>
-        <p className="text-sm text-muted">Role-based weekly limits · 🔴 Overloaded · 🟡 Close to Maximum · 🟢 Balanced</p>
+        <p className="text-sm text-muted">Faculty type workload model · 🔴 Unbalanced FT · 🟢 Balanced FT · 🔵 Flexible PT</p>
       </div>
 
       <DuplicateBanner />
@@ -137,7 +140,8 @@ function FacultyDrilldown() {
   const roleRegistry = useStore((s) => s.roleRegistry);
   const roleMaxHours = useStore((s) => s.roleMaxHours);
   const departmentRegistry = useStore((s) => s.departmentRegistry);
-  const thresholds = useStore((s) => s.thresholds);
+  const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
+  const setFacultyType = useStore((s) => s.setFacultyType);
   const lecturers = useMemo(
     () => [...new Set(termSessions.map((s) => s.lecturer).filter((x): x is string => !!x))].sort(),
     [termSessions],
@@ -148,10 +152,11 @@ function FacultyDrilldown() {
 
   const role = roleRegistry[chosen] ?? DEFAULT_ROLE;
   const maxH = maxHoursForRole(role, roleMaxHours);
+  const facultyType = facultyTypeOf(chosen, facultyTypeRegistry);
   const totalH = mine.reduce((a, s) => a + (s.workloadHours ?? 0), 0);
-  const { status, reason } = workloadStatus(totalH, maxH, thresholds.nearMaxPct, thresholds.farUnderPct);
+  const { status, reason } = workloadStatus(totalH, maxH, facultyType);
   const pct = maxH > 0 ? Math.min(100, (totalH / maxH) * 100) : 0;
-  const barColor = status === "Overloaded" ? "danger" : status === "Balanced" ? "good" : "warn";
+  const barColor = status === "Unbalanced" ? "danger" : status === "Balanced" ? "good" : "info";
   const depts = [...new Set(mine.map((s) => departmentFor(s.programme, departmentRegistry)).filter((x): x is string => !!x))];
   const grid = useMemo(() => buildGrid(mine, ["unitCode", "room"]), [mine]);
 
@@ -166,8 +171,28 @@ function FacultyDrilldown() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <Badge tone="neutral">{role}</Badge>
+          <FacultyTypeBadge type={facultyType} />
           <Badge tone="neutral">{mine.length} sessions</Badge>
           <StatusBadge status={status} />
+        </div>
+      </div>
+      <div className="rounded-card border border-rule bg-surface-2/20 px-3 py-2 flex items-center justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="text-[0.68rem] uppercase tracking-wide text-muted">Faculty type</div>
+          <div className="text-sm text-content truncate">Controls workload status for {chosen}</div>
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          {FACULTY_TYPE_OPTIONS.map((type) => (
+            <Button
+              key={type}
+              size="sm"
+              variant={facultyType === type ? "primary" : "outline"}
+              onClick={() => setFacultyType(chosen, type)}
+              disabled={facultyType === type}
+            >
+              {FACULTY_TYPE_LABEL[type]}
+            </Button>
+          ))}
         </div>
       </div>
 

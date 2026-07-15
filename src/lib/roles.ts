@@ -23,34 +23,8 @@ export function maxHoursForRole(role: string | null, roleMaxHours?: RoleMaxHours
   return map[role];
 }
 
-export function workloadStatus(
-  hours: number,
-  maxHours: number,
-  nearMaxPct = 0.85,
-  farUnderPct = 0.4,
-): { status: WorkloadStatus; reason: string } {
-  if (maxHours <= 0) {
-    if (hours > 0) return { status: "Overloaded", reason: "role has no weekly-hours allowance" };
-    return { status: "Balanced", reason: "" };
-  }
-  if (hours > maxHours) {
-    return { status: "Overloaded", reason: `${fmt(hours)}h exceeds the ${fmt(maxHours)}h role limit` };
-  }
-  if (hours >= nearMaxPct * maxHours) {
-    return { status: "Close to Maximum", reason: `nearing the ${fmt(maxHours)}h role limit` };
-  }
-  if (hours < farUnderPct * maxHours) {
-    return { status: "Close to Maximum", reason: "significantly under the recommended load" };
-  }
-  return { status: "Balanced", reason: "" };
-}
-
-function fmt(n: number): string {
-  return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, "");
-}
-
 export const STATUS_TONE: Record<WorkloadStatus, "red" | "amber" | "green"> = {
-  Overloaded: "red",
-  "Close to Maximum": "amber",
   Balanced: "green",
+  Unbalanced: "red",
+  Flexible: "amber",
 };

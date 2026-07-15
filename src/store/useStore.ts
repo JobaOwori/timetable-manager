@@ -5,6 +5,8 @@ import {
   DayCode,
   DEFAULT_THRESHOLDS,
   DepartmentRegistry,
+  FacultyType,
+  FacultyTypeRegistry,
   RoleMaxHours,
   RoleRegistry,
   RoomRegistry,
@@ -32,6 +34,7 @@ interface State {
   roleMaxHours: RoleMaxHours;
   departmentRegistry: DepartmentRegistry;
   subjectAssignments: Record<string, string[]>; // lecturer -> unit codes
+  facultyTypeRegistry: FacultyTypeRegistry; // lecturer -> FT/PT
   thresholds: Thresholds;
   activeTerm: string | null;
   terms: string[];
@@ -55,6 +58,7 @@ interface State {
   setFilter: (key: "fPrograms" | "fLecturers" | "fRooms" | "fDays" | "fDepartments", v: string[]) => void;
   assignSubject: (lecturer: string, unitCode: string) => void;
   unassignSubject: (lecturer: string, unitCode: string) => void;
+  setFacultyType: (lecturer: string, type: FacultyType) => void;
   mergeFaculty: (from: string, to: string) => void;
   dedupeFaculty: () => number;
   transferLecturer: (rowId: number, newLecturer: string) => void;
@@ -70,6 +74,7 @@ interface Snapshot {
   sessions: Session[];
   subjectAssignments: Record<string, string[]>;
   roleRegistry: RoleRegistry;
+  facultyTypeRegistry: FacultyTypeRegistry;
 }
 
 const HISTORY_MAX = 50;
@@ -80,10 +85,16 @@ function pushSnap(s: {
   sessions: Session[];
   subjectAssignments: Record<string, string[]>;
   roleRegistry: RoleRegistry;
+  facultyTypeRegistry: FacultyTypeRegistry;
 }): Snapshot[] {
   return [
     ...s.history,
-    { sessions: s.sessions, subjectAssignments: s.subjectAssignments, roleRegistry: s.roleRegistry },
+    {
+      sessions: s.sessions,
+      subjectAssignments: s.subjectAssignments,
+      roleRegistry: s.roleRegistry,
+      facultyTypeRegistry: s.facultyTypeRegistry,
+    },
   ].slice(-HISTORY_MAX);
 }
 
@@ -125,6 +136,7 @@ function applyResult(name: string, r: IngestResult) {
     roleRegistry: r.roleRegistry,
     departmentRegistry: r.departmentRegistry,
     subjectAssignments: r.subjectAssignments,
+    facultyTypeRegistry: r.facultyTypeRegistry,
     terms: r.terms,
     activeTerm: r.terms[0] ?? null,
     history: [] as Snapshot[],
@@ -145,6 +157,7 @@ export const useStore = create<State>((set, get) => ({
   roleMaxHours: loadPersisted().roleMaxHours ?? { ...ROLE_MAX_HOURS },
   departmentRegistry: {},
   subjectAssignments: {},
+  facultyTypeRegistry: {},
   thresholds: loadPersisted().thresholds ?? { ...DEFAULT_THRESHOLDS },
   activeTerm: null,
   terms: [],
@@ -211,17 +224,25 @@ export const useStore = create<State>((set, get) => ({
       if (!cur.includes(unitCode)) return {};
       return { history: pushSnap(s), subjectAssignments: { ...s.subjectAssignments, [lecturer]: cur.filter((u) => u !== unitCode) } };
     }),
+  setFacultyType: (lecturer, type) =>
+    set((s) => {
+      if ((s.facultyTypeRegistry[lecturer] ?? "FT") === type) return {};
+      return { history: pushSnap(s), facultyTypeRegistry: { ...s.facultyTypeRegistry, [lecturer]: type } };
+    }),
   mergeFaculty: (from, to) =>
     set((s) => {
       const sessions = mergeLecturer(s.sessions, from, to);
       const roleRegistry = { ...s.roleRegistry };
       if (roleRegistry[from] && !roleRegistry[to]) roleRegistry[to] = roleRegistry[from];
       delete roleRegistry[from];
+      const facultyTypeRegistry = { ...s.facultyTypeRegistry };
+      if (facultyTypeRegistry[from] && !facultyTypeRegistry[to]) facultyTypeRegistry[to] = facultyTypeRegistry[from];
+      delete facultyTypeRegistry[from];
       const subjectAssignments = { ...s.subjectAssignments };
       const merged = [...new Set([...(subjectAssignments[to] ?? []), ...(subjectAssignments[from] ?? [])])].sort();
       if (merged.length) subjectAssignments[to] = merged;
       delete subjectAssignments[from];
-      return { history: pushSnap(s), sessions, roleRegistry, subjectAssignments };
+      return { history: pushSnap(s), sessions, roleRegistry, facultyTypeRegistry, subjectAssignments };
     }),
   dedupeFaculty: () => {
     const map = facultyDedupMap(get().sessions);
@@ -230,15 +251,18 @@ export const useStore = create<State>((set, get) => ({
     set((s) => {
       const sessions = applyFacultyMerge(s.sessions, map);
       const roleRegistry = { ...s.roleRegistry };
+      const facultyTypeRegistry = { ...s.facultyTypeRegistry };
       const subjectAssignments = { ...s.subjectAssignments };
       for (const [from, to] of Object.entries(map)) {
         if (roleRegistry[from] && !roleRegistry[to]) roleRegistry[to] = roleRegistry[from];
         delete roleRegistry[from];
+        if (facultyTypeRegistry[from] && !facultyTypeRegistry[to]) facultyTypeRegistry[to] = facultyTypeRegistry[from];
+        delete facultyTypeRegistry[from];
         const merged = [...new Set([...(subjectAssignments[to] ?? []), ...(subjectAssignments[from] ?? [])])].sort();
         if (merged.length) subjectAssignments[to] = merged;
         delete subjectAssignments[from];
       }
-      return { history: pushSnap(s), sessions, roleRegistry, subjectAssignments };
+      return { history: pushSnap(s), sessions, roleRegistry, facultyTypeRegistry, subjectAssignments };
     });
     return count;
   },
@@ -279,6 +303,7 @@ export const useStore = create<State>((set, get) => ({
         sessions: prev.sessions,
         subjectAssignments: prev.subjectAssignments,
         roleRegistry: prev.roleRegistry,
+        facultyTypeRegistry: prev.facultyTypeRegistry,
       };
     }),
 }));

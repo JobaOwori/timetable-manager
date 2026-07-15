@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { buildSessions, autoMapColumns } from "@/lib/ingest";
-import { Session } from "@/lib/types";
-import { validatePlacement, placementOf, hasError } from "@/lib/validate";
+import { DEFAULT_THRESHOLDS, Session } from "@/lib/types";
+import { validatePlacement, placementOf, hasError, detectRuleViolations } from "@/lib/validate";
 import { ROLE_MAX_HOURS } from "@/lib/roles";
 
 const HEADERS = [
@@ -31,7 +31,7 @@ const opts = {
   roleRegistry: {} as Record<string, string>,
   roleMaxHours: ROLE_MAX_HOURS,
   roomRegistry: { "101": 30, "102": 30, "109": 200 } as Record<string, number>,
-  thresholds: { capacityTolerance: 20, maxConsecutiveHours: 6, maxGapMinutes: 15 },
+  thresholds: { ...DEFAULT_THRESHOLDS },
 };
 
 describe("validatePlacement", () => {
@@ -111,5 +111,101 @@ describe("validatePlacement", () => {
     const t1 = s.find((x) => x.unitCode === "T1")!;
     const v = validatePlacement(t1.rowId, placementOf(t1), s, opts);
     expect(v.length).toBe(0);
+  });
+
+  it("enforces a maximum of three sessions per lecturer per day", () => {
+    const s = makeSessions([
+      base({ UNITCODE: "D1", Faculty: "Dr Day", WDAY: "MON", Time: "8:00AM - 8:55AM", Hours: 1, ROOMCODE: "201", BATCHCODE: "B1" }),
+      base({ UNITCODE: "D2", Faculty: "Dr Day", WDAY: "MON", Time: "10:00AM - 10:55AM", Hours: 1, ROOMCODE: "202", BATCHCODE: "B2" }),
+      base({ UNITCODE: "D3", Faculty: "Dr Day", WDAY: "MON", Time: "1:00PM - 1:55PM", Hours: 1, ROOMCODE: "203", BATCHCODE: "B3" }),
+      base({ UNITCODE: "MOVE", Faculty: "Dr Other", WDAY: "TUE", Time: "3:00PM - 3:55PM", Hours: 1, ROOMCODE: "204", BATCHCODE: "B4" }),
+    ]);
+    const move = s.find((x) => x.unitCode === "MOVE")!;
+    const fourthMonday = validatePlacement(
+      move.rowId,
+      { ...placementOf(move), lecturer: "Dr Day", day: "MON", startMin: 900, endMin: 955 },
+      s,
+      opts,
+    );
+    expect(fourthMonday.some((x) => x.kind === "max_per_day")).toBe(true);
+
+    const differentDay = validatePlacement(
+      move.rowId,
+      { ...placementOf(move), lecturer: "Dr Day", day: "WED", startMin: 900, endMin: 955 },
+      s,
+      opts,
+    );
+    expect(differentDay.some((x) => x.kind === "max_per_day")).toBe(false);
+  });
+
+  it("blocks full-time lecturers in the Friday 4-6 PM slot but allows part-time and earlier FT slots", () => {
+    const s = makeSessions([
+      base({ UNITCODE: "EVENING", Faculty: "Dr Evening", WDAY: "MON", Time: "9:00AM - 10:55AM" }),
+    ]);
+    const session = s[0];
+
+    const ftEvening = validatePlacement(
+      session.rowId,
+      { ...placementOf(session), day: "FRI", startMin: 960, endMin: 1075 },
+      s,
+      opts,
+    );
+    expect(ftEvening.some((x) => x.kind === "faculty_rule")).toBe(true);
+
+    const ptEvening = validatePlacement(
+      session.rowId,
+      { ...placementOf(session), day: "FRI", startMin: 960, endMin: 1075 },
+      s,
+      { ...opts, facultyTypeRegistry: { "Dr Evening": "PT" } },
+    );
+    expect(ptEvening.some((x) => x.kind === "faculty_rule")).toBe(false);
+
+    const ftMorning = validatePlacement(
+      session.rowId,
+      { ...placementOf(session), day: "FRI", startMin: 600, endMin: 715 },
+      s,
+      opts,
+    );
+    expect(ftMorning.some((x) => x.kind === "faculty_rule")).toBe(false);
+  });
+
+  it("enforces Saturday rules for undergraduate and postgraduate programmes", () => {
+    const s = makeSessions([
+      base({ UNITCODE: "UG", Programm: "BSCCS", Faculty: "Dr UG", WDAY: "MON" }),
+      base({ UNITCODE: "PG", Programm: "MSCIT", Faculty: "Dr PG", WDAY: "MON", ROOMCODE: "102", BATCHCODE: "B2" }),
+    ]);
+    const ug = s.find((x) => x.unitCode === "UG")!;
+    const pg = s.find((x) => x.unitCode === "PG")!;
+
+    const ugSaturday = validatePlacement(ug.rowId, { ...placementOf(ug), day: "SAT" }, s, opts);
+    expect(ugSaturday.some((x) => x.kind === "programme_rule")).toBe(true);
+
+    const pgWeekday = validatePlacement(pg.rowId, placementOf(pg), s, opts);
+    expect(pgWeekday.some((x) => x.kind === "programme_rule")).toBe(true);
+
+    const pgSaturday = validatePlacement(pg.rowId, { ...placementOf(pg), day: "SAT" }, s, opts);
+    expect(pgSaturday.some((x) => x.kind === "programme_rule")).toBe(false);
+
+    const ugWeekday = validatePlacement(ug.rowId, placementOf(ug), s, opts);
+    expect(ugWeekday.some((x) => x.kind === "programme_rule")).toBe(false);
+  });
+});
+
+describe("detectRuleViolations", () => {
+  it("reports timetable rows that break scheduling policy rules", () => {
+    const s = makeSessions([
+      base({ UNITCODE: "PG", Programm: "MSCIT", Faculty: "Dr PG", WDAY: "MON" }),
+    ]);
+    const violations = detectRuleViolations(s, opts);
+    expect(violations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          rowId: s[0].rowId,
+          unitCode: "PG",
+          programme: "MSCIT",
+          kind: "programme_rule",
+        }),
+      ]),
+    );
   });
 });

@@ -30,8 +30,8 @@ export function OverviewPage({ onNavigate }: { onNavigate: (t: "resolve" | "facu
         <StatCard label="Room Clashes" value={summary.roomClashes} tone={tone(summary.roomClashes)} onClick={() => onNavigate("resolve")} />
         <StatCard label="Lecturer Clashes" value={summary.lecturerClashes} tone={tone(summary.lecturerClashes)} onClick={() => onNavigate("resolve")} />
         <StatCard label="Cohort Clashes" value={summary.cohortClashes} tone={tone(summary.cohortClashes)} onClick={() => onNavigate("resolve")} />
-        <StatCard label="Overloaded" value={summary.overloadedLecturers} tone={tone(summary.overloadedLecturers)} onClick={() => onNavigate("faculty")} />
-        <StatCard label="Close to Max" value={summary.closeToMaxLecturers} tone={tone(summary.closeToMaxLecturers, true)} onClick={() => onNavigate("faculty")} />
+        <StatCard label="Unbalanced FT" value={summary.unbalancedLecturers} tone={tone(summary.unbalancedLecturers)} onClick={() => onNavigate("faculty")} />
+        <StatCard label="Part-Time" value={summary.partTimeLecturers} tone="info" onClick={() => onNavigate("faculty")} />
         <StatCard label="Over Capacity" value={summary.overCapacitySessions} tone={tone(summary.overCapacitySessions)} onClick={() => onNavigate("rooms")} />
         <StatCard label="Data Issues" value={summary.dataQualityIssues} tone={tone(summary.dataQualityIssues, true)} onClick={() => onNavigate("data")} />
       </div>

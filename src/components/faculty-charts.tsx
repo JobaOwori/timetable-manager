@@ -12,7 +12,7 @@ import type { WorkloadStatus } from "@/lib/types";
 
 type Tone = "danger" | "warn" | "good" | "info" | "brass";
 
-const STATUS_ORDER: WorkloadStatus[] = ["Overloaded", "Close to Maximum", "Balanced"];
+const STATUS_ORDER: WorkloadStatus[] = ["Unbalanced", "Balanced", "Flexible"];
 
 function clamp(n: number, min = 0, max = 100) {
   return Math.min(max, Math.max(min, n));
@@ -24,8 +24,8 @@ function cappedPct(value: number, max: number) {
 }
 
 function statusTone(status: WorkloadStatus | string): Tone {
-  if (status === "Overloaded") return "danger";
-  if (status === "Close to Maximum") return "warn";
+  if (status === "Unbalanced") return "danger";
+  if (status === "Flexible") return "info";
   return "good";
 }
 
@@ -53,6 +53,7 @@ export function FacultyAnalytics() {
   const activeTerm = useStore((s) => s.activeTerm);
   const roleRegistry = useStore((s) => s.roleRegistry);
   const roleMaxHours = useStore((s) => s.roleMaxHours);
+  const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
 
   const rooms = useMemo(
     () => roomReport(filtered, roomRegistry, thresholds.underutilPct, thresholds.capacityTolerance),
@@ -60,8 +61,8 @@ export function FacultyAnalytics() {
   );
 
   const faculty = useMemo(
-    () => facultyReport(filtered, roleRegistry, roleMaxHours, departmentRegistry, thresholds),
-    [filtered, roleRegistry, roleMaxHours, departmentRegistry, thresholds],
+    () => facultyReport(filtered, roleRegistry, roleMaxHours, departmentRegistry, facultyTypeRegistry),
+    [filtered, roleRegistry, roleMaxHours, departmentRegistry, facultyTypeRegistry],
   );
 
   const weeklyWorkload = useMemo(
@@ -103,9 +104,11 @@ export function FacultyAnalytics() {
   }, [faculty]);
 
   const loadBalance = useMemo(() => {
-    const overloaded = workload.filter((w) => w.status === "Overloaded").length;
-    const underLoaded = workload.filter((w) => w.remainingHours > 0.5 * w.maxHours).length;
-    return { overloaded, underLoaded, max: Math.max(1, overloaded, underLoaded) };
+    const fullTime = workload.filter((w) => w.facultyType === "FT");
+    const unbalanced = fullTime.filter((w) => w.status === "Unbalanced").length;
+    const balanced = fullTime.filter((w) => w.status === "Balanced").length;
+    const partTime = workload.filter((w) => w.facultyType === "PT").length;
+    return { unbalanced, balanced, partTime, max: Math.max(1, unbalanced, balanced, partTime) };
   }, [workload]);
 
   const roomUtilization = useMemo(
@@ -122,11 +125,11 @@ export function FacultyAnalytics() {
     const facultyCount = Math.max(1, workload.length);
     const capacityRows = Math.max(1, capacity.length);
     // Health starts at 100 and subtracts normalized penalties for operational risk:
-    // clashes (25), overloads (20), room capacity pressure (20), data quality (15),
-    // consecutive-teaching strain (10), and duplicate schedule groups (10).
+    // clashes (25), full-time workload imbalance (20), room capacity pressure (20),
+    // data quality (15), consecutive-teaching strain (10), and duplicate schedule groups (10).
     const penalty =
       (clashes.length / totalSessions) * 25 +
-      (summary.overloadedLecturers / facultyCount) * 20 +
+      (summary.unbalancedLecturers / facultyCount) * 20 +
       ((summary.overCapacitySessions + summary.withinToleranceSessions * 0.5) / capacityRows) * 20 +
       (summary.dataQualityIssues / totalSessions) * 15 +
       (summary.consecutiveViolations / facultyCount) * 10 +
@@ -170,7 +173,10 @@ export function FacultyAnalytics() {
             </div>
           </div>
           <p className="mt-3 text-xs text-muted">
-            Penalizes clashes, overloads, room pressure, data issues, long consecutive blocks, and duplicate groups.
+            Penalizes clashes, full-time workload imbalance, room pressure, data issues, long consecutive blocks, and duplicate groups.
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {summary.unbalancedLecturers} unbalanced full-time · {summary.partTimeLecturers} part-time flexible
           </p>
         </Card>
 
@@ -260,11 +266,12 @@ export function FacultyAnalytics() {
         </Card>
 
         <Card className="p-4 min-w-0 overflow-hidden">
-          <SectionTitle>Overloaded vs under-loaded faculty</SectionTitle>
-          <div className="grid sm:grid-cols-2 gap-3">
+          <SectionTitle>Workload balance (Full-Time)</SectionTitle>
+          <div className="grid sm:grid-cols-3 gap-3">
             {[
-              { label: "Overloaded", value: loadBalance.overloaded, tone: "danger" as Tone },
-              { label: "Under-loaded", value: loadBalance.underLoaded, tone: "info" as Tone },
+              { label: "Unbalanced FT", value: loadBalance.unbalanced, tone: "danger" as Tone },
+              { label: "Balanced FT", value: loadBalance.balanced, tone: "good" as Tone },
+              { label: "Part-Time Flexible", value: loadBalance.partTime, tone: "info" as Tone },
             ].map((item) => (
               <div key={item.label} className="rounded-card border border-rule bg-surface-2/40 p-3 min-w-0">
                 <div className="flex items-center justify-between gap-2">
@@ -277,7 +284,7 @@ export function FacultyAnalytics() {
               </div>
             ))}
           </div>
-          <p className="mt-3 text-xs text-muted">Under-loaded means remaining hours exceed half of the role maximum.</p>
+          <p className="mt-3 text-xs text-muted">Full-Time lecturers are balanced only when their hours match their weekly target; Part-Time lecturers stay flexible.</p>
         </Card>
 
         <Card className="p-4 min-w-0 overflow-hidden">

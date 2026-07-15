@@ -56,6 +56,10 @@ export type RoleRegistry = Record<string, string>;
 export type RoleMaxHours = Record<string, number>;
 export type DepartmentRegistry = Record<string, string>;
 
+/** Full-Time vs Part-Time. FT have a fixed weekly target; PT are paid hourly. */
+export type FacultyType = "FT" | "PT";
+export type FacultyTypeRegistry = Record<string, FacultyType>;
+
 export interface Thresholds {
   nearMaxPct: number; // e.g. 0.85
   farUnderPct: number; // e.g. 0.4
@@ -63,6 +67,7 @@ export interface Thresholds {
   capacityTolerance: number; // students over capacity allowed
   maxConsecutiveHours: number;
   maxGapMinutes: number;
+  maxSessionsPerDay: number; // per-lecturer daily session cap
 }
 
 export const DEFAULT_THRESHOLDS: Thresholds = {
@@ -72,6 +77,7 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
   capacityTolerance: 20,
   maxConsecutiveHours: 6,
   maxGapMinutes: 15,
+  maxSessionsPerDay: 3,
 };
 
 export type ClashType = "room" | "lecturer" | "batch_code";
@@ -93,7 +99,8 @@ export interface Clash {
   room2: string | null;
 }
 
-export type WorkloadStatus = "Overloaded" | "Close to Maximum" | "Balanced";
+// Balanced = FT at target; Unbalanced = FT off target (red); Flexible = PT (hourly).
+export type WorkloadStatus = "Balanced" | "Unbalanced" | "Flexible";
 
 export interface WorkloadRow {
   lecturer: string;
@@ -102,11 +109,13 @@ export interface WorkloadRow {
   sessions: number;
   units: string;
   role: string;
+  facultyType: FacultyType;
   maxHours: number;
   remainingHours: number;
   status: WorkloadStatus;
   statusReason: string;
 }
+
 
 export type CapacityStatus =
   | "Over Capacity"

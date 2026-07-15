@@ -127,7 +127,7 @@ function tryMonotonicRemedies(
   const improves = (next: Session[]) => relevantClashCount(next, types, lecturer) < beforeCount;
 
   if (activeTypes.size > 0) {
-    for (const candidate of rescheduleCandidates(session, working).filter((c) => c.free)) {
+    for (const candidate of rescheduleCandidates(session, working, opts).filter((c) => c.free)) {
       const next = applyReschedule(working, session.rowId, candidate.day, candidate.startMin, candidate.endMin);
       if (improves(next)) {
         return {
@@ -147,8 +147,8 @@ function tryMonotonicRemedies(
   if (activeTypes.has("lecturer") && session.lecturer !== null) {
     const candidates = transferCandidates(session, working, opts);
     const ordered = [
-      ...candidates.filter((c) => c.available && c.projectedStatus !== "Overloaded"),
-      ...candidates.filter((c) => c.available && c.projectedStatus === "Overloaded"),
+      ...candidates.filter((c) => c.available && !c.wouldOverload),
+      ...candidates.filter((c) => c.available && c.wouldOverload),
     ];
     for (const candidate of ordered) {
       const next = applyTransfer(working, session.rowId, candidate.lecturer);
@@ -168,7 +168,7 @@ function tryMonotonicRemedies(
   }
 
   if (activeTypes.has("room") && session.room !== null && !session.isVirtualRoom && opts.roomRegistry) {
-    const candidates = roomCandidates(session, working, opts.roomRegistry, opts.capacityTolerance ?? 0);
+    const candidates = roomCandidates(session, working, opts.roomRegistry ?? {}, opts.capacityTolerance ?? 0);
     const ordered = candidates.filter((c) => c.available && c.fits);
     for (const candidate of ordered) {
       const next = applyRoomChange(working, session.rowId, candidate.room);
@@ -197,7 +197,7 @@ function unresolvedReasons(
   activeTypes: Set<ClashType>,
 ): string[] {
   const reasons: string[] = [];
-  const freeSlots = rescheduleCandidates(session, sessions).filter((c) => c.free);
+  const freeSlots = rescheduleCandidates(session, sessions, opts).filter((c) => c.free);
 
   if (freeSlots.length === 0) {
     if (activeTypes.has("batch_code")) {
@@ -216,7 +216,7 @@ function unresolvedReasons(
       reasons.push(`No lecturer transfer is possible because ${unitLabel(session)} has no assigned lecturer.`);
     } else {
       const candidates = transferCandidates(session, sessions, opts);
-      if (!candidates.some((c) => c.available && c.projectedStatus !== "Overloaded")) {
+      if (!candidates.some((c) => c.available && !c.wouldOverload)) {
         reasons.push(`No other lecturer is free at ${placementLabel(session)} without exceeding their weekly limit.`);
       } else {
         reasons.push(`Available lecturer transfers at ${placementLabel(session)} do not reduce the selected clash count.`);
@@ -230,7 +230,7 @@ function unresolvedReasons(
     } else if (!opts.roomRegistry) {
       reasons.push("No room registry is configured, so a replacement room cannot be chosen automatically.");
     } else {
-      const candidates = roomCandidates(session, sessions, opts.roomRegistry, opts.capacityTolerance ?? 0);
+      const candidates = roomCandidates(session, sessions, opts.roomRegistry ?? {}, opts.capacityTolerance ?? 0);
       if (!candidates.some((c) => c.available && c.fits)) {
         reasons.push("No free room with enough capacity is available at this time.");
       } else {
@@ -303,7 +303,7 @@ export function explainSession(
   opts: AutoResolveOptions,
 ): { canReschedule: boolean; canTransfer: boolean; canMoveRoom: boolean; reasons: string[] } {
   const reasons: string[] = [];
-  const canReschedule = rescheduleCandidates(session, sessions).some((c) => c.free);
+  const canReschedule = rescheduleCandidates(session, sessions, opts).some((c) => c.free);
   if (!canReschedule) reasons.push(`No free time slot is available to move ${unitLabel(session)} to in this term.`);
 
   const canTransfer =
@@ -313,7 +313,7 @@ export function explainSession(
 
   const canMoveRoom =
     session.room !== null && !session.isVirtualRoom && !!opts.roomRegistry &&
-    roomCandidates(session, sessions, opts.roomRegistry, opts.capacityTolerance ?? 0).some((r) => r.available && r.fits);
+    roomCandidates(session, sessions, opts.roomRegistry ?? {}, opts.capacityTolerance ?? 0).some((r) => r.available && r.fits);
   if (session.room !== null && !session.isVirtualRoom && !canMoveRoom)
     reasons.push("No free room with enough capacity is available at this time.");
 

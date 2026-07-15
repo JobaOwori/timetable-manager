@@ -4,12 +4,14 @@
 // language, exactly why a proposed fix is or isn't allowed).
 import {
   DayCode,
+  FacultyTypeRegistry,
   RoleMaxHours,
   RoleRegistry,
   Session,
   Thresholds,
 } from "./types";
 import { DEFAULT_ROLE, maxHoursForRole } from "./roles";
+import { facultyTypeOf, FRIDAY_BLOCK, programmeLevel } from "./facultyType";
 import { minutesToLabel } from "./clean";
 
 export type ViolationKind =
@@ -18,7 +20,10 @@ export type ViolationKind =
   | "cohort"
   | "workload"
   | "consecutive"
-  | "capacity";
+  | "capacity"
+  | "max_per_day"
+  | "faculty_rule"
+  | "programme_rule";
 
 export type Severity = "error" | "warning";
 
@@ -38,6 +43,7 @@ export interface Placement {
   isVirtualRoom: boolean;
   lecturer: string | null;
   batchCode: string | null;
+  programme: string | null;
   term: string | null;
   headCount: number | null;
   workloadHours: number | null;
@@ -46,8 +52,12 @@ export interface Placement {
 export interface ValidateOptions {
   roleRegistry?: RoleRegistry;
   roleMaxHours?: RoleMaxHours;
+  facultyTypeRegistry?: FacultyTypeRegistry;
   roomRegistry?: Record<string, number>;
-  thresholds?: Pick<Thresholds, "capacityTolerance" | "maxConsecutiveHours" | "maxGapMinutes">;
+  thresholds?: Pick<
+    Thresholds,
+    "capacityTolerance" | "maxConsecutiveHours" | "maxGapMinutes" | "maxSessionsPerDay"
+  >;
 }
 
 const overlap = (
@@ -67,6 +77,7 @@ export function placementOf(s: Session): Placement {
     isVirtualRoom: s.isVirtualRoom,
     lecturer: s.lecturer,
     batchCode: s.batchCode,
+    programme: s.programme,
     term: s.term,
     headCount: s.headCount,
     workloadHours: s.workloadHours,
@@ -163,6 +174,49 @@ export function validatePlacement(
       });
   }
 
+  // Max sessions per lecturer per day.
+  if (p.lecturer !== null) {
+    const maxPerDay = opts.thresholds?.maxSessionsPerDay ?? 3;
+    const dayCount = sameDay.filter((s) => s.lecturer === p.lecturer).length + 1; // +1 for this one
+    if (dayCount > maxPerDay)
+      out.push({
+        kind: "max_per_day",
+        severity: "error",
+        message: `${p.lecturer} would have ${dayCount} sessions on ${p.day} (max ${maxPerDay} per day).`,
+      });
+  }
+
+  // Full-time lecturers cannot be scheduled in the Friday 4:00–6:00 PM slot.
+  if (
+    p.lecturer !== null &&
+    p.day === FRIDAY_BLOCK.day &&
+    facultyTypeOf(p.lecturer, opts.facultyTypeRegistry) === "FT" &&
+    overlap(p.startMin, p.endMin, FRIDAY_BLOCK.startMin, FRIDAY_BLOCK.endMin)
+  ) {
+    out.push({
+      kind: "faculty_rule",
+      severity: "error",
+      message: `${p.lecturer} is Full-Time and can't be scheduled in the Friday 4:00–6:00 PM slot.`,
+    });
+  }
+
+  // Programme-level day rules: UG never on Saturday; PG (Master's/PhD) only on Saturday.
+  const level = programmeLevel(p.programme);
+  if (level === "ug" && p.day === "SAT") {
+    out.push({
+      kind: "programme_rule",
+      severity: "error",
+      message: `Undergraduate programme ${p.programme ?? ""} can't be scheduled on Saturday.`.trim(),
+    });
+  }
+  if (level === "pg" && p.day !== "SAT") {
+    out.push({
+      kind: "programme_rule",
+      severity: "error",
+      message: `Master's/PhD programme ${p.programme ?? ""} must be scheduled on Saturday.`.trim(),
+    });
+  }
+
   // Room capacity (warning within tolerance, error beyond).
   if (p.room !== null && !p.isVirtualRoom && p.headCount !== null && opts.roomRegistry) {
     const cap = opts.roomRegistry[p.room];
@@ -227,3 +281,53 @@ function round(n: number, dp = 1): number {
 }
 
 export const hasError = (v: Violation[]): boolean => v.some((x) => x.severity === "error");
+
+/** Rule kinds beyond simple double-booking (the institution's policies). */
+const RULE_KINDS: ViolationKind[] = ["max_per_day", "faculty_rule", "programme_rule"];
+
+export interface RuleViolation {
+  rowId: number;
+  unitCode: string | null;
+  programme: string | null;
+  lecturer: string | null;
+  day: DayCode | null;
+  time: string | null;
+  kind: ViolationKind;
+  message: string;
+}
+
+/**
+ * Scan the current timetable for sessions that break a scheduling POLICY (max
+ * sessions/day, full-time Friday-evening block, or the UG/PG Saturday rules) —
+ * as opposed to plain double-bookings. Used to surface & fix policy breaches.
+ */
+export function detectRuleViolations(sessions: Session[], opts: ValidateOptions = {}): RuleViolation[] {
+  const out: RuleViolation[] = [];
+  const seenMaxPerDay = new Set<string>();
+  for (const s of sessions) {
+    if (s.day === null || s.startMin === null || s.endMin === null) continue;
+    const viols = validatePlacement(s.rowId, placementOf(s), sessions, opts).filter((v) =>
+      RULE_KINDS.includes(v.kind),
+    );
+    for (const v of viols) {
+      // Collapse the per-day cap to one entry per (lecturer, day).
+      if (v.kind === "max_per_day") {
+        const key = `${s.lecturer}||${s.day}`;
+        if (seenMaxPerDay.has(key)) continue;
+        seenMaxPerDay.add(key);
+      }
+      out.push({
+        rowId: s.rowId,
+        unitCode: s.unitCode,
+        programme: s.programme,
+        lecturer: s.lecturer,
+        day: s.day,
+        time: s.timeRaw,
+        kind: v.kind,
+        message: v.message,
+      });
+    }
+  }
+  return out;
+}
+

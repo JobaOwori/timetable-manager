@@ -27,6 +27,7 @@ export function DataPage() {
   const roleMaxHours = useStore((s) => s.roleMaxHours);
   const roomRegistry = useStore((s) => s.roomRegistry);
   const departmentRegistry = useStore((s) => s.departmentRegistry);
+  const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
   const thresholds = useStore((s) => s.thresholds);
   const { clashes, workload, capacity, quality, summary } = useAnalysis(filtered);
 
@@ -44,11 +45,11 @@ export function DataPage() {
   const [report, setReport] = useState<Report>("faculty");
   const reportData = useMemo(() => {
     if (report === "faculty")
-      return facultyReport(termSessions, roleRegistry, roleMaxHours, departmentRegistry, thresholds) as unknown as Record<string, unknown>[];
+      return facultyReport(termSessions, roleRegistry, roleMaxHours, departmentRegistry, facultyTypeRegistry) as unknown as Record<string, unknown>[];
     if (report === "room")
       return roomReport(termSessions, roomRegistry, thresholds.underutilPct, thresholds.capacityTolerance) as unknown as Record<string, unknown>[];
     return programmeReport(termSessions, departmentRegistry, roomRegistry) as unknown as Record<string, unknown>[];
-  }, [report, termSessions, roleRegistry, roleMaxHours, roomRegistry, departmentRegistry, thresholds]);
+  }, [report, termSessions, roleRegistry, roleMaxHours, roomRegistry, departmentRegistry, facultyTypeRegistry, thresholds]);
 
   const reportCols: Column<Record<string, unknown>>[] = reportData.length
     ? Object.keys(reportData[0]).map((k) => ({

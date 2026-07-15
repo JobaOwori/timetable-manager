@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildSessions, autoMapColumns } from "@/lib/ingest";
-import { Session } from "@/lib/types";
+import { DEFAULT_THRESHOLDS, Session } from "@/lib/types";
 import {
   lecturerKey, detectDuplicateFaculty, facultyDedupMap, applyFacultyMerge,
   subjectAssignmentsFromSessions, distinctUnits,
@@ -35,7 +35,7 @@ const resolveOpts = {
   roleRegistry: {} as Record<string, string>,
   roleMaxHours: ROLE_MAX_HOURS,
   departmentRegistry: DEFAULT_PROGRAMME_DEPARTMENT,
-  thresholds: { nearMaxPct: 0.85, farUnderPct: 0.4 },
+  thresholds: { ...DEFAULT_THRESHOLDS },
   roomRegistry: {} as Record<string, number>,
   capacityTolerance: 20,
 };

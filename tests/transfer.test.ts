@@ -7,7 +7,7 @@ import {
 import { detectClashes } from "@/lib/analysis";
 import { ROLE_MAX_HOURS } from "@/lib/roles";
 import { DEFAULT_PROGRAMME_DEPARTMENT } from "@/lib/departments";
-import { Session } from "@/lib/types";
+import { DEFAULT_THRESHOLDS, Session } from "@/lib/types";
 
 const HEADERS = [
   "Programm", "SEMCODE", "BATCHCODE", "UNITCODE", "UNITNAME", "TERM", "WDAY",
@@ -34,7 +34,7 @@ const opts = {
   roleRegistry: {} as Record<string, string>,
   roleMaxHours: ROLE_MAX_HOURS,
   departmentRegistry: DEFAULT_PROGRAMME_DEPARTMENT,
-  thresholds: { nearMaxPct: 0.85, farUnderPct: 0.4 },
+  thresholds: { ...DEFAULT_THRESHOLDS },
 };
 
 describe("transfer", () => {
@@ -43,7 +43,7 @@ describe("transfer", () => {
     // Dr Free is idle. Dr Busy is teaching MON 9:30-11 (would clash).
     const s = makeSessions([
       base({ UNITCODE: "MOVE", Faculty: "Dr Smith", Time: "9:00AM - 10:55AM" }),
-      base({ UNITCODE: "BUSY", Faculty: "Dr Busy", Time: "9:30AM - 11:00AM", ROOMCODE: "102" }),
+      base({ UNITCODE: "BUSY", Faculty: "Dr Busy", Time: "9:30AM - 11:00AM", ROOMCODE: "102", BATCHCODE: "B2" }),
       base({ UNITCODE: "OTHER", Faculty: "Dr Free", Time: "2:00PM - 3:55PM", ROOMCODE: "103", WDAY: "TUE" }),
     ]);
     const target = s.find((x) => x.unitCode === "MOVE")!;
@@ -52,6 +52,7 @@ describe("transfer", () => {
     expect(cands.map((c) => c.lecturer)).toContain("Dr Free");
     expect(cands.map((c) => c.lecturer)).not.toContain("Dr Busy");
     expect(cands[0].lecturer).toBe("Dr Free");
+    expect(cands[0].facultyType).toBe("FT");
     expect(cands[0].recommended).toBe(true);
     expect(cands[0].available).toBe(true);
   });
@@ -59,7 +60,7 @@ describe("transfer", () => {
   it("includes unavailable candidates with a reason when asked", () => {
     const s = makeSessions([
       base({ UNITCODE: "MOVE", Faculty: "Dr Smith", Time: "9:00AM - 10:55AM" }),
-      base({ UNITCODE: "BUSY", Faculty: "Dr Busy", Time: "9:30AM - 11:00AM", ROOMCODE: "102" }),
+      base({ UNITCODE: "BUSY", Faculty: "Dr Busy", Time: "9:30AM - 11:00AM", ROOMCODE: "102", BATCHCODE: "B2" }),
     ]);
     const target = s.find((x) => x.unitCode === "MOVE")!;
     const cands = transferCandidates(target, s, { ...opts, includeUnavailable: true });
