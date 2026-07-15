@@ -45,6 +45,7 @@ export interface Placement {
   lecturer: string | null;
   batchCode: string | null;
   programme: string | null;
+  unitName: string | null;
   term: string | null;
   headCount: number | null;
   workloadHours: number | null;
@@ -79,6 +80,7 @@ export function placementOf(s: Session): Placement {
     lecturer: s.lecturer,
     batchCode: s.batchCode,
     programme: s.programme,
+    unitName: s.unitName,
     term: s.term,
     headCount: s.headCount,
     workloadHours: s.workloadHours,

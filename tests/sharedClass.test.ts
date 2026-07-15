@@ -78,6 +78,40 @@ describe("combined / shared classes", () => {
   });
 });
 
+describe("equivalent subject groups (combined in one room)", () => {
+  // Same room + slot, DIFFERENT cohorts & lecturers, but the same subject.
+  const equiv = () =>
+    makeSessions([
+      base({ Programm: "BBA", BATCHCODE: "FA1", UNITCODE: "U1", UNITNAME: "Financial Accounting", Faculty: "Dr A", ROOMCODE: "301" }),
+      base({ Programm: "BCOM", BATCHCODE: "FA2", UNITCODE: "U2", UNITNAME: "Fundamentals of Financial Accounting", Faculty: "Dr B", ROOMCODE: "301" }),
+    ]);
+
+  it("does NOT flag equivalent subjects sharing a room as a clash", () => {
+    const s = equiv();
+    expect(detectClashes(s, "room").length).toBe(0);
+    const g = detectSharedClasses(s);
+    expect(g.length).toBe(1);
+    expect(g[0].rowIds.length).toBe(2);
+  });
+
+  it("DOES flag unrelated subjects competing for the same room", () => {
+    const s = makeSessions([
+      base({ BATCHCODE: "X1", UNITCODE: "U1", UNITNAME: "Discrete Mathematics", Faculty: "Dr A", ROOMCODE: "301" }),
+      base({ BATCHCODE: "X2", UNITCODE: "U2", UNITNAME: "Microeconomics", Faculty: "Dr B", ROOMCODE: "301" }),
+    ]);
+    expect(detectClashes(s, "room").length).toBeGreaterThan(0);
+  });
+
+  it("DOES flag a lecturer double-booked across DIFFERENT rooms (same subject)", () => {
+    // One person can't be in two rooms — never suppressed by equivalence.
+    const s = makeSessions([
+      base({ BATCHCODE: "Y1", UNITCODE: "U1", UNITNAME: "Financial Accounting", Faculty: "Dr A", ROOMCODE: "301" }),
+      base({ BATCHCODE: "Y2", UNITCODE: "U2", UNITNAME: "Financial Accounting", Faculty: "Dr A", ROOMCODE: "502" }),
+    ]);
+    expect(detectClashes(s, "lecturer").length).toBeGreaterThan(0);
+  });
+});
+
 describe("programme classification by code prefix", () => {
   it("maps prefixes to the five levels", () => {
     expect(programmeLevel("BSCCS")).toBe("bachelor");

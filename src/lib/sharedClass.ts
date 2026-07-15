@@ -1,17 +1,22 @@
 // Combined / shared classes.
 //
-// Some programmes intentionally attend ONE physical class together (e.g. BBAIB
-// "Taxation" and BBAIM "Introduction to Taxation" taught as a single combined
-// class). Such rows share the same term, day, time, ROOM and LECTURER but list
-// different programmes/cohorts/units. They must NOT be reported as room or
-// lecturer double-bookings, and they must be counted as ONE class for workload
-// and per-day limits.
+// Some programmes intentionally attend ONE physical class together — either the
+// same lecturer teaching several cohorts (e.g. BBAIB "Taxation" and BBAIM
+// "Introduction to Taxation"), or the same SUBJECT taught to several cohorts in
+// one room even when the sheet lists it under slightly different names or a
+// co-lecturer (e.g. "Financial Accounting" and "Fundamentals of Financial
+// Accounting"). These must NOT be reported as room or lecturer double-bookings,
+// and must be counted as ONE class for workload and per-day limits.
 //
-// This is logically safe to auto-detect: a single lecturer physically cannot
-// teach two *different* classes in the same room at the same time, so identical
-// (term, day, time, room, lecturer) rows are, by definition, the same class.
+// A combined class is always anchored on a shared ROOM at the same exact slot,
+// which is what makes auto-detection safe: a room physically holds one class at
+// a time, so two co-scheduled rows in the same room are the same class when they
+// share the lecturer (one session) OR the subject family (equivalent units).
+// Two rows in DIFFERENT rooms are never merged — a person/room can't be in two
+// places — so genuine double-bookings are always preserved.
 import { DayCode, Session } from "./types";
 import { formatTimeRange } from "./clean";
+import { sameSubjectFamily, subjectFamilyKey } from "./subjectGroup";
 
 /**
  * Identity of the physical class a session belongs to. Two sessions with the
@@ -36,16 +41,36 @@ function differentCohort(a: Session, b: Session): boolean {
   return a.batchCode !== null && b.batchCode !== null && a.batchCode !== b.batchCode;
 }
 
-/** True when a and b are two rows of the same combined class. */
-export function sameSharedClass(a: Session, b: Session): boolean {
-  const ka = sharedClassKey(a);
-  return ka !== null && ka === sharedClassKey(b) && differentCohort(a, b);
+/**
+ * True when a and b are two rows of the same combined class: same term and exact
+ * slot, DIFFERENT cohorts, sharing one physical room, and either the same
+ * lecturer (one physical session) or the same subject family (equivalent units
+ * co-taught in that room).
+ */
+export function isCombinedPair(a: Session, b: Session): boolean {
+  if (a.term !== b.term) return false;
+  if (a.day === null || a.day !== b.day) return false;
+  if (a.startMin === null || a.endMin === null) return false;
+  if (a.startMin !== b.startMin || a.endMin !== b.endMin) return false;
+  if (!differentCohort(a, b)) return false;
+  // A combined class shares one physical room at that slot.
+  const sameRoom =
+    a.room !== null && !a.isVirtualRoom && !b.isVirtualRoom && a.room === b.room;
+  if (!sameRoom) return false;
+  // Same lecturer → literally one session; otherwise require an equivalent subject.
+  if (a.lecturer !== null && a.lecturer === b.lecturer) return true;
+  return sameSubjectFamily(a.unitName, b.unitName);
 }
 
+/** Backwards-compatible alias. */
+export const sameSharedClass = isCombinedPair;
+
 /**
- * True when a placement (lecturer/room/exact-slot) would form the same combined
- * class as an existing session — used to suppress self-conflicts while validating.
- * Requires a different cohort so two units for the SAME students still clash.
+ * True when a placement (room/lecturer/subject at an exact slot) would form the
+ * same combined class as an existing session — used to suppress self-conflicts
+ * while validating. Requires a different cohort and a shared physical room so
+ * two units for the SAME students, or a lecturer/room double-booking across
+ * different rooms, still clash.
  */
 export function isCombinedPlacement(
   s: Session,
@@ -56,21 +81,17 @@ export function isCombinedPlacement(
     startMin: number | null;
     endMin: number | null;
     batchCode: string | null;
+    unitName: string | null;
   },
 ): boolean {
-  return (
-    p.lecturer !== null &&
-    p.room !== null &&
-    p.batchCode !== null &&
-    s.batchCode !== null &&
-    s.batchCode !== p.batchCode &&
-    !p.isVirtualRoom &&
-    !s.isVirtualRoom &&
-    s.lecturer === p.lecturer &&
-    s.room === p.room &&
-    s.startMin === p.startMin &&
-    s.endMin === p.endMin
-  );
+  if (p.startMin === null || p.endMin === null) return false;
+  if (s.startMin !== p.startMin || s.endMin !== p.endMin) return false;
+  if (p.batchCode === null || s.batchCode === null || s.batchCode === p.batchCode) return false;
+  const sameRoom =
+    p.room !== null && !p.isVirtualRoom && !s.isVirtualRoom && s.room === p.room;
+  if (!sameRoom) return false;
+  if (p.lecturer !== null && s.lecturer === p.lecturer) return true;
+  return sameSubjectFamily(s.unitName, p.unitName);
 }
 
 export interface SharedClassGroup {
@@ -88,32 +109,60 @@ export interface SharedClassGroup {
 
 /** All combined classes present (groups with 2+ member rows for DISTINCT cohorts). */
 export function detectSharedClasses(sessions: Session[]): SharedClassGroup[] {
-  const byKey = new Map<string, Session[]>();
+  // Only rows sharing a term, day and exact slot can be the same physical class.
+  const bySlot = new Map<string, Session[]>();
   for (const s of sessions) {
-    const k = sharedClassKey(s);
-    if (!k) continue;
-    const arr = byKey.get(k) ?? [];
-    arr.push(s);
-    byKey.set(k, arr);
+    if (s.term === null || s.day === null || s.startMin === null || s.endMin === null) continue;
+    const k = `${s.term}||${s.day}||${s.startMin}||${s.endMin}`;
+    const arr = bySlot.get(k);
+    if (arr) arr.push(s);
+    else bySlot.set(k, [s]);
   }
+
   const groups: SharedClassGroup[] = [];
-  for (const [key, rows] of byKey) {
-    // A true combined class serves 2+ different cohorts sharing one room/lecturer.
-    const cohorts = new Set(rows.map((r) => r.batchCode).filter((x): x is string => !!x));
-    if (cohorts.size < 2) continue;
-    const f = rows[0];
-    groups.push({
-      key,
-      term: f.term,
-      day: f.day,
-      time: formatTimeRange(f.startMin, f.endMin),
-      room: f.room,
-      lecturer: f.lecturer,
-      rowIds: rows.map((r) => r.rowId),
-      programmes: [...new Set(rows.map((r) => r.programme).filter((x): x is string => !!x))],
-      unitCodes: [...new Set(rows.map((r) => r.unitCode).filter((x): x is string => !!x))],
-      headCount: rows.reduce((a, r) => a + (r.headCount ?? 0), 0),
+  for (const rows of bySlot.values()) {
+    if (rows.length < 2) continue;
+    // Union rows that form a combined pair (transitively, so 3+ cohorts merge).
+    const parent = rows.map((_, i) => i);
+    const find = (x: number): number => {
+      while (parent[x] !== x) {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+      }
+      return x;
+    };
+    for (let i = 0; i < rows.length; i++) {
+      for (let j = i + 1; j < rows.length; j++) {
+        if (isCombinedPair(rows[i], rows[j])) parent[find(i)] = find(j);
+      }
+    }
+    const comps = new Map<number, Session[]>();
+    rows.forEach((s, i) => {
+      const r = find(i);
+      const arr = comps.get(r);
+      if (arr) arr.push(s);
+      else comps.set(r, [s]);
     });
+    for (const members of comps.values()) {
+      if (members.length < 2) continue;
+      const cohorts = new Set(members.map((r) => r.batchCode).filter((x): x is string => !!x));
+      if (cohorts.size < 2) continue;
+      const f = members[0];
+      groups.push({
+        key: `${f.term}||${f.day}||${f.startMin}||${f.endMin}||${f.room ?? ""}||${
+          subjectFamilyKey(f.unitName) ?? f.lecturer ?? f.rowId
+        }`,
+        term: f.term,
+        day: f.day,
+        time: formatTimeRange(f.startMin, f.endMin),
+        room: f.room,
+        lecturer: f.lecturer,
+        rowIds: members.map((r) => r.rowId),
+        programmes: [...new Set(members.map((r) => r.programme).filter((x): x is string => !!x))],
+        unitCodes: [...new Set(members.map((r) => r.unitCode).filter((x): x is string => !!x))],
+        headCount: members.reduce((a, r) => a + (r.headCount ?? 0), 0),
+      });
+    }
   }
   return groups;
 }
@@ -131,16 +180,9 @@ export function combinedRowIds(sessions: Session[]): Set<number> {
  * sessions-per-day so a shared class is counted once, not once per programme.
  */
 export function dedupeSharedClasses(sessions: Session[]): Session[] {
-  const combinedKeys = new Set(detectSharedClasses(sessions).map((g) => g.key));
-  const seen = new Set<string>();
-  const out: Session[] = [];
-  for (const s of sessions) {
-    const k = sharedClassKey(s);
-    if (k && combinedKeys.has(k)) {
-      if (seen.has(k)) continue;
-      seen.add(k);
-    }
-    out.push(s);
+  const drop = new Set<number>();
+  for (const g of detectSharedClasses(sessions)) {
+    for (const id of g.rowIds.slice(1)) drop.add(id);
   }
-  return out;
+  return sessions.filter((s) => !drop.has(s.rowId));
 }
