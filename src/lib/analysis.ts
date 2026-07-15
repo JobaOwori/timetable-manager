@@ -20,6 +20,7 @@ import {
 import { formatTimeRange, isBlank, minutesToLabel } from "./clean";
 import { DEFAULT_ROLE, maxHoursForRole } from "./roles";
 import { facultyTypeOf, workloadStatus } from "./facultyType";
+import { dedupeSharedClasses, sameSharedClass } from "./sharedClass";
 import { departmentFor } from "./departments";
 
 function groupBy<T, K extends string | number>(items: T[], key: (t: T) => K): Map<K, T[]> {
@@ -55,6 +56,9 @@ export function detectClashes(sessions: Session[], groupCol: ClashType): Clash[]
       for (let j = i + 1; j < subs.length; j++) {
         const b = subs[j];
         if (a.startMin! < b.endMin! && b.startMin! < a.endMin!) {
+          // Two rows of the same combined/shared class are ONE physical class,
+          // not a double-booking — never report them as a clash.
+          if (sameSharedClass(a, b)) continue;
           pairs.push({
             clashType: groupCol,
             term: a.term!,
@@ -107,7 +111,9 @@ export function lecturerWorkload(
   for (const [, subs] of buckets) {
     const lecturer = subs[0].lecturer!;
     const term = subs[0].term ?? "";
-    const totalHours = subs.reduce((acc, s) => acc + (s.workloadHours ?? 0), 0);
+    // A combined/shared class counts once toward hours and session count.
+    const distinct = dedupeSharedClasses(subs);
+    const totalHours = distinct.reduce((acc, s) => acc + (s.workloadHours ?? 0), 0);
     const units = [...new Set(subs.map((s) => s.unitCode).filter((u): u is string => !!u))].sort();
     const role = roleRegistry[lecturer] ?? DEFAULT_ROLE;
     const maxHours = maxHoursForRole(role, roleMaxHours);
@@ -117,7 +123,7 @@ export function lecturerWorkload(
       lecturer,
       term,
       totalHours: round(totalHours),
-      sessions: subs.length,
+      sessions: distinct.length,
       units: units.join(", "),
       role,
       facultyType,
@@ -368,7 +374,8 @@ export function facultyReport(
     const role = roleRegistry[lecturer] ?? DEFAULT_ROLE;
     const maxHours = maxHoursForRole(role, roleMaxHours);
     const facultyType = facultyTypeOf(lecturer, facultyTypeRegistry);
-    const totalHours = subs.reduce((a, s) => a + (s.workloadHours ?? 0), 0);
+    const distinct = dedupeSharedClasses(subs); // combined class counts once
+    const totalHours = distinct.reduce((a, s) => a + (s.workloadHours ?? 0), 0);
     const { status, reason } = workloadStatus(totalHours, maxHours, facultyType);
     const depts = [
       ...new Set(
@@ -380,7 +387,7 @@ export function facultyReport(
       lecturer, role, facultyType,
       departments: depts.length ? depts.join(", ") : "\u2014",
       courses: courses.join(", "),
-      sessions: subs.length,
+      sessions: distinct.length,
       totalHours: round(totalHours),
       maxHours,
       remainingHours: round(maxHours - totalHours),

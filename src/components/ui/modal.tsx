@@ -40,7 +40,7 @@ export function Modal({
   // push the dialog off-screen. This keeps it viewport-centered.
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-      <div className="absolute inset-0 bg-ink/50 backdrop-blur-sm animate-fade" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink/60 backdrop-blur-sm animate-fade" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"

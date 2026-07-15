@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Link2 } from "lucide-react";
 import { useFilteredSessions } from "@/store/selectors";
 import { useStore } from "@/store/useStore";
 import { allClashes } from "@/lib/analysis";
+import { detectSharedClasses } from "@/lib/sharedClass";
 import { formatTimeRange } from "@/lib/clean";
 import { DAY_ORDER, DayCode, Session, ClashType } from "@/lib/types";
 import { Card, EmptyState } from "@/components/ui/card";
@@ -40,6 +41,16 @@ export function MasterTimetable() {
       }
     }
     return map;
+  }, [termSessions]);
+
+  // Rows that belong to an intentional combined/shared class (different cohorts
+  // taught together in one room) — surfaced so users see they are NOT conflicts.
+  const combined = useMemo(() => {
+    const co = new Map<number, string[]>();
+    for (const g of detectSharedClasses(termSessions)) {
+      for (const id of g.rowIds) co.set(id, g.programmes);
+    }
+    return co;
   }, [termSessions]);
 
   const { slots, days, buckets } = useMemo(() => {
@@ -88,6 +99,9 @@ export function MasterTimetable() {
         <span className="flex items-center gap-1.5">
           <span className="inline-block w-3 h-3 rounded-sm bg-danger/20 ring-1 ring-danger/50" /> In conflict — click to resolve
         </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block w-3 h-3 rounded-sm bg-info/15 ring-1 ring-info/40" /> Combined class (shared, not a conflict)
+        </span>
         <span className="ml-auto">
           {filtered.length} sessions · <span className="text-danger font-mono">{totalClashing}</span> flagged
         </span>
@@ -123,6 +137,7 @@ export function MasterTimetable() {
                             key={s.rowId}
                             session={s}
                             types={clashInfo.get(s.rowId)}
+                            combinedWith={combined.get(s.rowId)}
                             onResolve={(type) => setResolve({ rowId: s.rowId, type })}
                           />
                         ))}
@@ -162,13 +177,16 @@ export function MasterTimetable() {
 function SessionChip({
   session,
   types,
+  combinedWith,
   onResolve,
 }: {
   session: Session;
   types: Set<ClashType> | undefined;
+  combinedWith?: string[];
   onResolve: (type: ClashType) => void;
 }) {
   const clashing = !!types && types.size > 0;
+  const combined = !clashing && !!combinedWith && combinedWith.length > 0;
   const primaryType: ClashType = types?.has("lecturer")
     ? "lecturer"
     : types?.has("room")
@@ -179,6 +197,7 @@ function SessionChip({
     <>
       <div className="flex items-center gap-1 min-w-0">
         {clashing && <AlertTriangle size={10} className="text-danger shrink-0" />}
+        {combined && <Link2 size={10} className="text-info shrink-0" />}
         <span className="font-mono font-medium text-ink truncate">{session.unitCode ?? "—"}</span>
       </div>
       <div className="text-[0.62rem] text-muted truncate">
@@ -187,6 +206,20 @@ function SessionChip({
       <div className="text-[0.6rem] text-muted/80 truncate">{session.batchCode ?? session.programme}</div>
     </>
   );
+
+  if (combined) {
+    return (
+      <div
+        className="rounded border border-info/40 bg-info/10 px-1.5 py-1 leading-tight"
+        title={`Combined class shared by ${combinedWith!.join(", ")} — intentional, not a conflict`}
+      >
+        {body}
+        <div className="mt-0.5 flex flex-wrap gap-0.5">
+          <Badge tone="info">combined</Badge>
+        </div>
+      </div>
+    );
+  }
 
   if (!clashing) {
     return (

@@ -56,7 +56,10 @@ describe("real sample integration (parity with Python engine)", () => {
     const all = allClashes(sessions).length;
     const sum = allClashes(t1).length + allClashes(t2).length;
     expect(all).toBe(sum);
-    expect(all).toBeGreaterThan(400); // Python reported 584
+    // Combined/shared classes (different cohorts intentionally taught together in
+    // one room by one lecturer) are no longer counted as clashes, so the total is
+    // well below the old Python parity figure of 584.
+    expect(all).toBeGreaterThan(150);
   });
 
   it("cross-checks the human-flagged LECTURER TIME CLASHING rows", () => {

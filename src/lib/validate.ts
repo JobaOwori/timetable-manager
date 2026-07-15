@@ -11,7 +11,8 @@ import {
   Thresholds,
 } from "./types";
 import { DEFAULT_ROLE, maxHoursForRole } from "./roles";
-import { facultyTypeOf, FRIDAY_BLOCK, programmeLevel } from "./facultyType";
+import { facultyTypeOf, FRIDAY_BLOCK, forbiddenOnSaturday, requiresSaturday } from "./facultyType";
+import { isCombinedPlacement, sharedClassKey } from "./sharedClass";
 import { minutesToLabel } from "./clean";
 
 export type ViolationKind =
@@ -104,9 +105,12 @@ export function validatePlacement(
   const sameDay = term.filter((s) => s.day === p.day);
   const at = (s: Session) => overlap(p.startMin!, p.endMin!, s.startMin, s.endMin);
 
-  // Room double-booking (physical rooms only).
+  // Room double-booking (physical rooms only). A row of the SAME combined class
+  // (same lecturer, room and exact slot) is the same physical class, not a clash.
   if (p.room !== null && !p.isVirtualRoom) {
-    const c = sameDay.find((s) => s.room === p.room && !s.isVirtualRoom && at(s));
+    const c = sameDay.find(
+      (s) => s.room === p.room && !s.isVirtualRoom && at(s) && !isCombinedPlacement(s, p),
+    );
     if (c)
       out.push({
         kind: "room",
@@ -116,9 +120,9 @@ export function validatePlacement(
       });
   }
 
-  // Lecturer double-booking.
+  // Lecturer double-booking (excluding rows of the same combined class).
   if (p.lecturer !== null) {
-    const c = sameDay.find((s) => s.lecturer === p.lecturer && at(s));
+    const c = sameDay.find((s) => s.lecturer === p.lecturer && at(s) && !isCombinedPlacement(s, p));
     if (c)
       out.push({
         kind: "lecturer",
@@ -174,10 +178,14 @@ export function validatePlacement(
       });
   }
 
-  // Max sessions per lecturer per day.
+  // Max sessions per lecturer per day (a combined/shared class counts once).
   if (p.lecturer !== null) {
     const maxPerDay = opts.thresholds?.maxSessionsPerDay ?? 3;
-    const dayCount = sameDay.filter((s) => s.lecturer === p.lecturer).length + 1; // +1 for this one
+    const others = sameDay.filter((s) => s.lecturer === p.lecturer);
+    const distinctKeys = new Set(others.map((s) => sharedClassKey(s) ?? `row-${s.rowId}`));
+    // the moving session joins an existing combined class only if it matches one
+    const joinsExisting = others.some((s) => isCombinedPlacement(s, p));
+    const dayCount = distinctKeys.size + (joinsExisting ? 0 : 1);
     if (dayCount > maxPerDay)
       out.push({
         kind: "max_per_day",
@@ -200,20 +208,20 @@ export function validatePlacement(
     });
   }
 
-  // Programme-level day rules: UG never on Saturday; PG (Master's/PhD) only on Saturday.
-  const level = programmeLevel(p.programme);
-  if (level === "ug" && p.day === "SAT") {
+  // Programme-level day rules (by code prefix): Bachelor's/Diploma/HEC never on
+  // Saturday; Master's/Doctoral only on Saturday.
+  if (p.day === "SAT" && forbiddenOnSaturday(p.programme)) {
     out.push({
       kind: "programme_rule",
       severity: "error",
-      message: `Undergraduate programme ${p.programme ?? ""} can't be scheduled on Saturday.`.trim(),
+      message: `${p.programme ?? "This programme"} (weekday programme) can't be scheduled on Saturday.`,
     });
   }
-  if (level === "pg" && p.day !== "SAT") {
+  if (p.day !== "SAT" && requiresSaturday(p.programme)) {
     out.push({
       kind: "programme_rule",
       severity: "error",
-      message: `Master's/PhD programme ${p.programme ?? ""} must be scheduled on Saturday.`.trim(),
+      message: `${p.programme ?? "This programme"} (Master's/Doctoral) must be scheduled on Saturday.`,
     });
   }
 

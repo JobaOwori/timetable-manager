@@ -7,12 +7,12 @@ import { useToast, ToastKind } from "@/store/useToast";
 
 const META: Record<
   ToastKind,
-  { icon: React.ReactNode; accent: string; bar: string; tint: string }
+  { icon: React.ReactNode; accent: string; bar: string }
 > = {
-  success: { icon: <CheckCircle2 size={22} />, accent: "text-good", bar: "bg-good", tint: "bg-good/10" },
-  info: { icon: <Info size={22} />, accent: "text-info", bar: "bg-info", tint: "bg-info/10" },
-  warn: { icon: <AlertTriangle size={22} />, accent: "text-warn", bar: "bg-warn", tint: "bg-warn/10" },
-  error: { icon: <XCircle size={22} />, accent: "text-danger", bar: "bg-danger", tint: "bg-danger/10" },
+  success: { icon: <CheckCircle2 size={22} />, accent: "text-good", bar: "bg-good" },
+  info: { icon: <Info size={22} />, accent: "text-info", bar: "bg-info" },
+  warn: { icon: <AlertTriangle size={22} />, accent: "text-warn", bar: "bg-warn" },
+  error: { icon: <XCircle size={22} />, accent: "text-danger", bar: "bg-danger" },
 };
 
 /** Prominent, top-centre stack of notifications. Mounted once at the app root. */
@@ -32,7 +32,7 @@ export function Toaster() {
             key={t.id}
             role="status"
             aria-live="polite"
-            className={`animate-toast-in pointer-events-auto flex w-full max-w-lg items-start gap-3 overflow-hidden rounded-card border border-rule bg-surface shadow-2xl ${m.tint}`}
+            className={`animate-toast-in pointer-events-auto flex w-full max-w-lg items-start gap-3 overflow-hidden rounded-card border border-rule bg-surface shadow-2xl`}
           >
             <span className={`w-1.5 self-stretch shrink-0 ${m.bar}`} aria-hidden />
             <span className={`mt-3.5 shrink-0 ${m.accent}`}>{m.icon}</span>

@@ -146,7 +146,7 @@ export function LecturerTransferPanel({ session, onDone }: { session: Session; o
   };
 
   return (
-    <div className="rounded-card border border-rule bg-parchment/40 p-3">
+    <div className="rounded-card border border-rule bg-surface-2 p-3">
       <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
         <SectionTitle className="mb-0 border-0 pb-0">
           Transfer <span className="font-mono">{session.unitCode}</span> to…
@@ -239,7 +239,7 @@ export function RoomTransferPanel({ session, onDone }: { session: Session; onDon
   };
 
   return (
-    <div className="rounded-card border border-rule bg-parchment/40 p-3">
+    <div className="rounded-card border border-rule bg-surface-2 p-3">
       <SectionTitle className="mb-2">
         Move <span className="font-mono">{session.unitCode}</span> (head count {session.headCount ?? "?"}) to a free room…
       </SectionTitle>
@@ -290,7 +290,7 @@ export function ReschedulePanel({ session, onDone }: { session: Session; onDone:
   };
 
   return (
-    <div className="rounded-card border border-rule bg-parchment/40 p-3">
+    <div className="rounded-card border border-rule bg-surface-2 p-3">
       <SectionTitle className="mb-2">
         Reschedule <span className="font-mono">{session.unitCode}</span> to a free slot (no
         lecturer, room or cohort clash)…

@@ -56,17 +56,55 @@ export function workloadStatus(
 
 // -------------------- Programme level (UG vs PG) --------------------
 
-export type ProgLevel = "ug" | "pg";
+export type ProgLevel = "bachelor" | "diploma" | "hec" | "master" | "doctoral";
 
 export const PROG_LEVEL_LABEL: Record<ProgLevel, string> = {
-  ug: "Undergraduate",
-  pg: "Postgraduate (Master's/PhD)",
+  bachelor: "Undergraduate (Bachelor's)",
+  diploma: "Diploma",
+  hec: "Higher Education Certificate",
+  master: "Master's",
+  doctoral: "Postgraduate / Doctoral",
 };
 
-/** Master's/PhD/Postgrad-diploma programmes start with M, PHD or PGD. */
+export const PROG_LEVEL_SHORT: Record<ProgLevel, string> = {
+  bachelor: "Bachelor's",
+  diploma: "Diploma",
+  hec: "HEC",
+  master: "Master's",
+  doctoral: "Doctoral",
+};
+
+/**
+ * Classify a programme purely from its code prefix (standardized):
+ *   HEC…            -> Higher Education Certificate
+ *   B…  (BBA/BSc…)  -> Undergraduate (Bachelor's)
+ *   D…              -> Diploma
+ *   M…  (MSc/MBA…)  -> Master's
+ *   P…  (PGD/PhD…)  -> Postgraduate / Doctoral
+ * Anything else defaults to Bachelor's (the most permissive weekday programme).
+ */
 export function programmeLevel(programme: string | null): ProgLevel {
-  if (!programme) return "ug";
-  return /^(M|PHD|PGD)/i.test(programme.trim()) ? "pg" : "ug";
+  if (!programme) return "bachelor";
+  const code = programme.trim().toUpperCase();
+  if (code.startsWith("HEC")) return "hec";
+  switch (code[0]) {
+    case "B": return "bachelor";
+    case "D": return "diploma";
+    case "M": return "master";
+    case "P": return "doctoral";
+    default: return "bachelor";
+  }
+}
+
+/** Master's & Doctoral programmes are scheduled ONLY on Saturday. */
+export function requiresSaturday(programme: string | null): boolean {
+  const l = programmeLevel(programme);
+  return l === "master" || l === "doctoral";
+}
+
+/** Bachelor's, Diploma and HEC programmes are never scheduled on Saturday. */
+export function forbiddenOnSaturday(programme: string | null): boolean {
+  return !requiresSaturday(programme);
 }
 
 // -------------------- Scheduling-rule constants --------------------
