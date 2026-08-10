@@ -260,22 +260,27 @@ test("20 · faculty and room drill-downs show course names too", async ({ page }
 });
 
 test("21 · Vercel Web Analytics is wired up", async ({ page }) => {
-  const insightsRequests: string[] = [];
+  // Vercel serves the analytics script from /_vercel/insights/script.js, or —
+  // on deployments with script obfuscation enabled — from a randomised path
+  // (e.g. /8d26682d956c4691/script.js) so ad-blockers can't match on the URL.
+  const isAnalytics = (url: string) =>
+    url.includes("/_vercel/insights") || /\/[0-9a-f]{12,}\/script\.js$/.test(url);
+
+  const requests: string[] = [];
   page.on("request", (r) => {
-    if (r.url().includes("/_vercel/insights")) insightsRequests.push(r.url());
+    if (isAnalytics(r.url())) requests.push(r.url());
   });
 
   await page.goto("/");
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(3000);
 
-  // The <Analytics /> component injects the page-view script on the client.
-  const scripts = await page
+  const tags = await page
     .locator("script[src]")
-    .evaluateAll((els) =>
-      els.map((e) => (e as HTMLScriptElement).src).filter((s) => s.includes("/_vercel/insights")),
-    );
+    .evaluateAll((els) => els.map((e) => (e as HTMLScriptElement).src));
+  const scriptTags = tags.filter(isAnalytics);
+
   expect(
-    scripts.length + insightsRequests.length,
-    "the Vercel insights script should be requested",
+    scriptTags.length + requests.length,
+    `the Vercel analytics script should load; saw scripts: ${JSON.stringify(tags.slice(0, 10))}`,
   ).toBeGreaterThan(0);
 });
