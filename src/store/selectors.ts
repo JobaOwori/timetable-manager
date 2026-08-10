@@ -13,6 +13,8 @@ import {
   summaryCounts,
 } from "@/lib/analysis";
 import { departmentFor } from "@/lib/departments";
+import { searchSessions } from "@/lib/search";
+import { mergeableGroups } from "@/lib/merge";
 import { DAY_ORDER } from "@/lib/types";
 
 /** Sessions scoped to the active term (hard isolation boundary). */
@@ -25,7 +27,7 @@ export function useTermSessions(): Session[] {
   );
 }
 
-/** Sessions after applying the sidebar filters (on top of term scope). */
+/** Sessions after applying the sidebar filters + search (on top of term scope). */
 export function useFilteredSessions(): { termSessions: Session[]; filtered: Session[] } {
   const termSessions = useTermSessions();
   const departmentRegistry = useStore((s) => s.departmentRegistry);
@@ -34,6 +36,7 @@ export function useFilteredSessions(): { termSessions: Session[]; filtered: Sess
   const fRooms = useStore((s) => s.fRooms);
   const fDays = useStore((s) => s.fDays);
   const fDepartments = useStore((s) => s.fDepartments);
+  const search = useStore((s) => s.search);
 
   const filtered = useMemo(() => {
     let out = termSessions;
@@ -46,10 +49,30 @@ export function useFilteredSessions(): { termSessions: Session[]; filtered: Sess
     if (fLecturers.length) out = out.filter((s) => s.lecturer !== null && fLecturers.includes(s.lecturer));
     if (fRooms.length) out = out.filter((s) => s.room !== null && fRooms.includes(s.room));
     if (fDays.length) out = out.filter((s) => s.day !== null && fDays.includes(s.day));
+    if (search.trim()) out = searchSessions(out, search, departmentRegistry);
     return out;
-  }, [termSessions, fPrograms, fLecturers, fRooms, fDays, fDepartments, departmentRegistry]);
+  }, [termSessions, fPrograms, fLecturers, fRooms, fDays, fDepartments, search, departmentRegistry]);
 
   return { termSessions, filtered };
+}
+
+/** How many filters (including the search box) are currently narrowing the view. */
+export function useActiveFilterCount(): number {
+  const fPrograms = useStore((s) => s.fPrograms);
+  const fLecturers = useStore((s) => s.fLecturers);
+  const fRooms = useStore((s) => s.fRooms);
+  const fDays = useStore((s) => s.fDays);
+  const fDepartments = useStore((s) => s.fDepartments);
+  const search = useStore((s) => s.search);
+  return (
+    fPrograms.length + fLecturers.length + fRooms.length + fDays.length + fDepartments.length +
+    (search.trim() ? 1 : 0)
+  );
+}
+
+/** Groups of duplicate rows that describe ONE teaching session and can be merged. */
+export function useMergeableGroups(sessions: Session[]) {
+  return useMemo(() => mergeableGroups(sessions), [sessions]);
 }
 
 export function useAnalysis(sessions: Session[]) {

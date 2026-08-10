@@ -18,8 +18,8 @@ import {
   WorkloadRow,
 } from "./types";
 import { formatTimeRange, isBlank, minutesToLabel } from "./clean";
-import { DEFAULT_ROLE, maxHoursForRole } from "./roles";
-import { facultyTypeOf, workloadStatus } from "./facultyType";
+import { DEFAULT_ROLE, maxHoursFor } from "./roles";
+import { effectiveFacultyType, workloadStatus } from "./facultyType";
 import { dedupeSharedClasses, sameSharedClass } from "./sharedClass";
 import { departmentFor } from "./departments";
 
@@ -116,8 +116,8 @@ export function lecturerWorkload(
     const totalHours = distinct.reduce((acc, s) => acc + (s.workloadHours ?? 0), 0);
     const units = [...new Set(subs.map((s) => s.unitCode).filter((u): u is string => !!u))].sort();
     const role = roleRegistry[lecturer] ?? DEFAULT_ROLE;
-    const maxHours = maxHoursForRole(role, roleMaxHours);
-    const facultyType = facultyTypeOf(lecturer, facultyTypeRegistry);
+    const facultyType = effectiveFacultyType(lecturer, roleRegistry, facultyTypeRegistry);
+    const maxHours = maxHoursFor(role, facultyType, roleMaxHours);
     const { status, reason } = workloadStatus(totalHours, maxHours, facultyType);
     rows.push({
       lecturer,
@@ -372,8 +372,8 @@ export function facultyReport(
   const rows: FacultyReportRow[] = [];
   for (const [lecturer, subs] of buckets) {
     const role = roleRegistry[lecturer] ?? DEFAULT_ROLE;
-    const maxHours = maxHoursForRole(role, roleMaxHours);
-    const facultyType = facultyTypeOf(lecturer, facultyTypeRegistry);
+    const facultyType = effectiveFacultyType(lecturer, roleRegistry, facultyTypeRegistry);
+    const maxHours = maxHoursFor(role, facultyType, roleMaxHours);
     const distinct = dedupeSharedClasses(subs); // combined class counts once
     const totalHours = distinct.reduce((a, s) => a + (s.workloadHours ?? 0), 0);
     const { status, reason } = workloadStatus(totalHours, maxHours, facultyType);

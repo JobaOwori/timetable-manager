@@ -16,7 +16,7 @@
 // places — so genuine double-bookings are always preserved.
 import { DayCode, Session } from "./types";
 import { formatTimeRange } from "./clean";
-import { sameSubjectFamily, subjectFamilyKey } from "./subjectGroup";
+import { sameSubjectFamily, similarSubject, subjectFamilyKey } from "./subjectGroup";
 
 /**
  * Identity of the physical class a session belongs to. Two sessions with the
@@ -42,23 +42,45 @@ function differentCohort(a: Session, b: Session): boolean {
 }
 
 /**
+ * True when two rows describe the same or a closely-related course unit: the
+ * same unit code, the same subject family, or near-identical titles (e.g.
+ * "Research Methods" vs "Business Research Methods"). Only ever consulted once
+ * room, lecturer and the exact time slot already match.
+ */
+export function sameOrRelatedUnit(
+  a: { unitCode: string | null; unitName: string | null },
+  b: { unitCode: string | null; unitName: string | null },
+): boolean {
+  if (a.unitCode !== null && a.unitCode === b.unitCode) return true;
+  return similarSubject(a.unitName, b.unitName);
+}
+
+/**
  * True when a and b are two rows of the same combined class: same term and exact
- * slot, DIFFERENT cohorts, sharing one physical room, and either the same
- * lecturer (one physical session) or the same subject family (equivalent units
- * co-taught in that room).
+ * slot, sharing one physical room, and either
+ *  - the same lecturer teaching the same or a closely-related unit (one physical
+ *    session the sheet happens to list twice under different titles), or
+ *  - DIFFERENT cohorts sharing that room with the same lecturer or an equivalent
+ *    subject (several programmes intentionally taught together).
  */
 export function isCombinedPair(a: Session, b: Session): boolean {
   if (a.term !== b.term) return false;
   if (a.day === null || a.day !== b.day) return false;
   if (a.startMin === null || a.endMin === null) return false;
   if (a.startMin !== b.startMin || a.endMin !== b.endMin) return false;
-  if (!differentCohort(a, b)) return false;
   // A combined class shares one physical room at that slot.
   const sameRoom =
     a.room !== null && !a.isVirtualRoom && !b.isVirtualRoom && a.room === b.room;
   if (!sameRoom) return false;
+
+  const sameLecturer = a.lecturer !== null && a.lecturer === b.lecturer;
+  // One lecturer, one room, one slot, one (or a near-identical) unit — the same
+  // physical teaching session however the cohorts happen to be labelled.
+  if (sameLecturer && sameOrRelatedUnit(a, b)) return true;
+
+  if (!differentCohort(a, b)) return false;
   // Same lecturer → literally one session; otherwise require an equivalent subject.
-  if (a.lecturer !== null && a.lecturer === b.lecturer) return true;
+  if (sameLecturer) return true;
   return sameSubjectFamily(a.unitName, b.unitName);
 }
 
@@ -81,16 +103,20 @@ export function isCombinedPlacement(
     startMin: number | null;
     endMin: number | null;
     batchCode: string | null;
+    unitCode?: string | null;
     unitName: string | null;
   },
 ): boolean {
   if (p.startMin === null || p.endMin === null) return false;
   if (s.startMin !== p.startMin || s.endMin !== p.endMin) return false;
-  if (p.batchCode === null || s.batchCode === null || s.batchCode === p.batchCode) return false;
   const sameRoom =
     p.room !== null && !p.isVirtualRoom && !s.isVirtualRoom && s.room === p.room;
   if (!sameRoom) return false;
-  if (p.lecturer !== null && s.lecturer === p.lecturer) return true;
+  const sameLecturer = p.lecturer !== null && s.lecturer === p.lecturer;
+  if (sameLecturer && sameOrRelatedUnit(s, { unitCode: p.unitCode ?? null, unitName: p.unitName }))
+    return true;
+  if (p.batchCode === null || s.batchCode === null || s.batchCode === p.batchCode) return false;
+  if (sameLecturer) return true;
   return sameSubjectFamily(s.unitName, p.unitName);
 }
 
@@ -104,10 +130,11 @@ export interface SharedClassGroup {
   rowIds: number[];
   programmes: string[];
   unitCodes: string[];
+  unitNames: string[];
   headCount: number; // combined enrolment across the cohorts
 }
 
-/** All combined classes present (groups with 2+ member rows for DISTINCT cohorts). */
+/** All combined classes present (groups of 2+ rows that are one physical class). */
 export function detectSharedClasses(sessions: Session[]): SharedClassGroup[] {
   // Only rows sharing a term, day and exact slot can be the same physical class.
   const bySlot = new Map<string, Session[]>();
@@ -145,9 +172,8 @@ export function detectSharedClasses(sessions: Session[]): SharedClassGroup[] {
     });
     for (const members of comps.values()) {
       if (members.length < 2) continue;
-      const cohorts = new Set(members.map((r) => r.batchCode).filter((x): x is string => !!x));
-      if (cohorts.size < 2) continue;
       const f = members[0];
+      const cohorts = new Set(members.map((r) => r.batchCode).filter((x): x is string => !!x));
       groups.push({
         key: `${f.term}||${f.day}||${f.startMin}||${f.endMin}||${f.room ?? ""}||${
           subjectFamilyKey(f.unitName) ?? f.lecturer ?? f.rowId
@@ -160,7 +186,11 @@ export function detectSharedClasses(sessions: Session[]): SharedClassGroup[] {
         rowIds: members.map((r) => r.rowId),
         programmes: [...new Set(members.map((r) => r.programme).filter((x): x is string => !!x))],
         unitCodes: [...new Set(members.map((r) => r.unitCode).filter((x): x is string => !!x))],
-        headCount: members.reduce((a, r) => a + (r.headCount ?? 0), 0),
+        unitNames: [...new Set(members.map((r) => r.unitName).filter((x): x is string => !!x))],
+        // Distinct cohorts add up; repeated rows for one cohort do not.
+        headCount: cohorts.size >= 2
+          ? members.reduce((a, r) => a + (r.headCount ?? 0), 0)
+          : Math.max(...members.map((r) => r.headCount ?? 0)),
       });
     }
   }

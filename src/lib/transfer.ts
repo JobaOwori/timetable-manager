@@ -13,12 +13,14 @@ import {
   Thresholds,
   WorkloadStatus,
 } from "./types";
-import { DEFAULT_ROLE, maxHoursForRole } from "./roles";
-import { facultyTypeOf, workloadStatus } from "./facultyType";
+import { DEFAULT_ROLE, maxHoursFor } from "./roles";
+import {
+  effectiveFacultyType, SATURDAY_WINDOW, forbiddenOnSaturday, requiresSaturday, workloadStatus,
+} from "./facultyType";
 import { departmentFor } from "./departments";
 import { finalizeSession } from "./ingest";
 import { minutesToLabel } from "./clean";
-import { Placement, ValidateOptions, placementOf, validatePlacement } from "./validate";
+import { Placement, ValidateOptions, Violation, ViolationKind, placementOf, validatePlacement } from "./validate";
 
 export const UNASSIGN = "\u2014 Unassign (TBA) \u2014";
 
@@ -97,8 +99,8 @@ export function transferCandidates(
 
   const candidates: TransferCandidate[] = allLecturers.map((lecturer) => {
     const role = roleRegistry[lecturer] ?? DEFAULT_ROLE;
-    const maxHours = maxHoursForRole(role, roleMaxHours);
-    const facultyType = facultyTypeOf(lecturer, facultyTypeRegistry);
+    const facultyType = effectiveFacultyType(lecturer, roleRegistry, facultyTypeRegistry);
+    const maxHours = maxHoursFor(role, facultyType, roleMaxHours);
     const currentHours = lecturerHoursInTerm(sessions, lecturer, session.term);
     const projectedHours = currentHours + sessionHours;
     const { status: projectedStatus } = workloadStatus(projectedHours, maxHours, facultyType);
@@ -255,10 +257,13 @@ export interface RescheduleCandidate {
 /**
  * Suggest free (day, time-slot) placements for `session`. Candidate slots are the
  * distinct time slots that already exist in the term's data (so we reuse the
- * institution's real periods), across every day present. A slot is "free" when
- * moving the session there breaks NO rule — no lecturer/room/cohort double-booking,
- * no workload/consecutive/max-per-day breach, and it honours the full-time Friday
- * block and the UG/PG Saturday policy.
+ * institution's real periods), across every day present. Saturday additionally
+ * gets slots synthesised inside its 9:00 AM – 4:00 PM teaching window, so a
+ * Saturday class that currently overruns 4:00 PM always has a compliant slot to
+ * move to even when the sheet contains none. A slot is "free" when moving the
+ * session there breaks NO rule — no lecturer/room/cohort double-booking, no
+ * workload/consecutive/max-per-day breach, and it honours the full-time Friday
+ * block, the UG/PG Saturday policy and the Saturday window.
  */
 export function rescheduleCandidates(
   session: Session,
@@ -274,6 +279,7 @@ export function rescheduleCandidates(
   }
   const slots = [...slotMap.values()].sort((a, b) => a.startMin - b.startMin);
   const days = DAY_ORDER.filter((d) => termRows.some((s) => s.day === d));
+  const satSlots = saturdaySlots(slots, session, opts);
 
   const probe = (day: DayCode, startMin: number, endMin: number): string | null => {
     const placement: Placement = { ...placementOf(session), day, startMin, endMin };
@@ -285,7 +291,7 @@ export function rescheduleCandidates(
 
   const candidates: RescheduleCandidate[] = [];
   for (const day of days) {
-    for (const slot of slots) {
+    for (const slot of day === "SAT" ? satSlots : slots) {
       // skip the current placement
       if (day === session.day && slot.startMin === session.startMin && slot.endMin === session.endMin) continue;
       const blockedBy = probe(day, slot.startMin, slot.endMin);
@@ -314,6 +320,403 @@ export function rescheduleCandidates(
   const best = list.find((c) => c.free);
   if (best) best.recommended = true;
   return list;
+}
+
+/**
+ * The Saturday slot menu: every existing slot that fits the 9:00 AM–4:00 PM
+ * window, plus slots synthesised on the half-hour for the session's own duration
+ * so a compliant Saturday placement always exists.
+ */
+function saturdaySlots(
+  slots: { startMin: number; endMin: number }[],
+  session: Session,
+  opts: ValidateOptions,
+): { startMin: number; endMin: number }[] {
+  const winStart = opts.thresholds?.saturdayStartMin ?? SATURDAY_WINDOW.startMin;
+  const winEnd = opts.thresholds?.saturdayEndMin ?? SATURDAY_WINDOW.endMin;
+  const out = new Map<string, { startMin: number; endMin: number }>();
+
+  for (const s of slots) {
+    if (s.startMin >= winStart && s.endMin <= winEnd) out.set(`${s.startMin}-${s.endMin}`, s);
+  }
+
+  // Tile the window on the half-hour with this session's own duration.
+  const duration =
+    session.startMin !== null && session.endMin !== null && session.endMin > session.startMin
+      ? session.endMin - session.startMin
+      : Math.round((session.durationHours ?? 2) * 60);
+  if (duration > 0 && duration <= winEnd - winStart) {
+    for (let start = winStart; start + duration <= winEnd; start += 30) {
+      out.set(`${start}-${start + duration}`, { startMin: start, endMin: start + duration });
+    }
+  }
+
+  return [...out.values()].sort((a, b) => a.startMin - b.startMin);
+}
+
+/**
+ * A complete, fully-validated proposal for moving a session: a new day/time and,
+ * where needed, a different room and/or lecturer. Unlike a bare slot move, a plan
+ * is only returned when EVERY constraint holds for the whole combination —
+ * lecturer, room and cohort availability, weekly workload, consecutive hours,
+ * per-day limits, room capacity, the full-time Friday block, the UG/PG Saturday
+ * rule and the Saturday teaching window.
+ */
+export interface ReschedulePlan {
+  day: DayCode;
+  startMin: number;
+  endMin: number;
+  room: string | null;
+  lecturer: string | null;
+  slotLabel: string; // "MON 9:00 AM - 10:55 AM"
+  label: string; // slot + what else changes
+  changes: string[]; // human-readable list of what moves
+  dayChanged: boolean;
+  timeChanged: boolean;
+  roomChanged: boolean;
+  lecturerChanged: boolean;
+  capacityWarning: string | null;
+  score: number;
+  recommended: boolean;
+}
+
+export interface ReschedulePlanOptions extends ValidateOptions {
+  /** Allow proposing a different room (default true). */
+  allowRoomChange?: boolean;
+  /** Allow proposing a different lecturer (default true, used as a fallback). */
+  allowLecturerChange?: boolean;
+  /** Cap on returned plans (default 40). */
+  limit?: number;
+}
+
+/** Distinct (start,end) slots used anywhere in the term, earliest first. */
+function termSlots(termRows: Session[]): { startMin: number; endMin: number }[] {
+  const map = new Map<string, { startMin: number; endMin: number }>();
+  for (const s of termRows) {
+    if (s.startMin === null || s.endMin === null || s.endMin <= s.startMin) continue;
+    map.set(`${s.startMin}-${s.endMin}`, { startMin: s.startMin, endMin: s.endMin });
+  }
+  return [...map.values()].sort((a, b) => a.startMin - b.startMin);
+}
+
+/**
+ * Errors that genuinely block a proposed move.
+ *
+ * Some rules are invariant under rescheduling: a lecturer's WEEKLY workload
+ * doesn't change by moving one of their classes to another slot, and a room's
+ * CAPACITY doesn't change by moving a class within that same room. When such a
+ * rule is already breached at the session's current position, letting it veto
+ * every alternative would make the class unfixable — the pre-existing problem
+ * would mask the clash we are actually trying to resolve. So a violation is
+ * ignored only when it already exists now AND this move cannot influence it.
+ */
+function blockingErrors(
+  violations: Violation[],
+  session: Session,
+  plan: { room: string | null; lecturer: string | null },
+  baseline: Set<ViolationKind>,
+): Violation[] {
+  return violations.filter((v) => {
+    if (v.severity !== "error") return false;
+    // Weekly hours depend on the lecturer alone.
+    if (v.kind === "workload" && plan.lecturer === session.lecturer && baseline.has("workload")) {
+      return false;
+    }
+    // Capacity depends on the room alone.
+    if (v.kind === "capacity" && plan.room === session.room && baseline.has("capacity")) {
+      return false;
+    }
+    return true;
+  });
+}
+
+/** Rules already broken where the session sits right now. */
+function baselineKinds(session: Session, sessions: Session[], opts: ValidateOptions): Set<ViolationKind> {
+  return new Set(
+    validatePlacement(session.rowId, placementOf(session), sessions, opts)
+      .filter((v) => v.severity === "error")
+      .map((v) => v.kind),
+  );
+}
+
+/** Every physical room known, from the registry and from the timetable itself. */
+function knownRooms(sessions: Session[], roomRegistry?: Record<string, number>): string[] {
+  return [
+    ...new Set([
+      ...Object.keys(roomRegistry ?? {}),
+      ...sessions.filter((s) => !s.isVirtualRoom).map((s) => s.room).filter((r): r is string => !!r),
+    ]),
+  ].sort();
+}
+
+/**
+ * Search day × time × room (× lecturer, only if nothing else works) for
+ * placements of `session` that break no rule at all, and rank them so the
+ * smallest change that fixes the problem comes first.
+ *
+ * Every returned plan has been validated end-to-end with `validatePlacement`,
+ * so applying one can never introduce a new clash.
+ */
+export function reschedulePlans(
+  session: Session,
+  sessions: Session[],
+  opts: ReschedulePlanOptions = {},
+): ReschedulePlan[] {
+  const allowRoom = opts.allowRoomChange ?? true;
+  const allowLecturer = opts.allowLecturerChange ?? true;
+  const limit = opts.limit ?? 40;
+
+  const termRows = sessions.filter((s) => s.term === session.term);
+  const slots = termSlots(termRows);
+  const days = DAY_ORDER.filter((d) => termRows.some((s) => s.day === d));
+  const satSlots = saturdaySlots(slots, session, opts);
+  const base = placementOf(session);
+
+  // Rooms to try: keep the current one first, then every other physical room
+  // ordered by how snugly it fits the class (least wasted seats first).
+  const hc = session.headCount;
+  const rooms: (string | null)[] = [session.room];
+  if (allowRoom && !session.isVirtualRoom) {
+    const others = knownRooms(sessions, opts.roomRegistry)
+      .filter((r) => r !== session.room)
+      .sort((a, b) => roomFitRank(a, hc, opts.roomRegistry) - roomFitRank(b, hc, opts.roomRegistry));
+    rooms.push(...others);
+  }
+
+  // Lecturers to try: the current one first; alternates are only explored when
+  // no plan exists that keeps them, so we never reassign work unnecessarily.
+  const alternates = allowLecturer
+    ? [...new Set(sessions.map((s) => s.lecturer).filter((l): l is string => !!l))].filter(
+        (l) => l !== session.lecturer,
+      )
+    : [];
+
+  const plans: ReschedulePlan[] = [];
+  const seen = new Set<string>();
+  const baseline = baselineKinds(session, sessions, opts);
+
+  const consider = (day: DayCode, slot: { startMin: number; endMin: number }, lecturer: string | null) => {
+    for (const room of rooms) {
+      const placement: Placement = {
+        ...base,
+        day,
+        startMin: slot.startMin,
+        endMin: slot.endMin,
+        room,
+        lecturer,
+      };
+      const violations = validatePlacement(session.rowId, placement, sessions, opts);
+      if (blockingErrors(violations, session, { room, lecturer }, baseline).length > 0) continue;
+
+      const key = `${day}|${slot.startMin}|${slot.endMin}|${room ?? ""}|${lecturer ?? ""}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      plans.push(
+        buildPlan(session, day, slot, room, lecturer, violations.find((v) => v.kind === "capacity")?.message ?? null),
+      );
+      // The first room that works at this slot is the best-fitting one; no need
+      // to enumerate the rest for the same slot.
+      return;
+    }
+  };
+
+  for (const day of days) {
+    for (const slot of day === "SAT" ? satSlots : slots) {
+      if (day === session.day && slot.startMin === session.startMin && slot.endMin === session.endMin) {
+        continue; // that's where it already is
+      }
+      consider(day, slot, session.lecturer);
+    }
+  }
+
+  // Fallback: nothing works for this lecturer anywhere — offer plans that also
+  // hand the class to a colleague who IS free (and stays within their limits).
+  if (plans.length === 0 && alternates.length > 0) {
+    for (const day of days) {
+      for (const slot of day === "SAT" ? satSlots : slots) {
+        for (const lecturer of alternates) {
+          consider(day, slot, lecturer);
+          if (plans.length >= limit) break;
+        }
+        if (plans.length >= limit) break;
+      }
+      if (plans.length >= limit) break;
+    }
+    // Staying put but changing lecturer/room is also a valid "reschedule".
+    if (session.day !== null && session.startMin !== null && session.endMin !== null) {
+      for (const lecturer of alternates) {
+        consider(session.day, { startMin: session.startMin, endMin: session.endMin }, lecturer);
+      }
+    }
+  }
+
+  plans.sort((a, b) => b.score - a.score);
+  const top = plans.slice(0, limit);
+  if (top.length > 0) top[0].recommended = true;
+  return top;
+}
+
+/** Lower is better: how much capacity is wasted on this class. */
+function roomFitRank(room: string, headCount: number | null, registry?: Record<string, number>): number {
+  const cap = registry?.[room];
+  if (cap === undefined) return 10_000; // unknown capacity — try after known ones
+  if (headCount === null) return 5_000 + cap;
+  if (cap < headCount) return 20_000 + (headCount - cap); // too small
+  return cap - headCount;
+}
+
+function buildPlan(
+  session: Session,
+  day: DayCode,
+  slot: { startMin: number; endMin: number },
+  room: string | null,
+  lecturer: string | null,
+  capacityWarning: string | null,
+): ReschedulePlan {
+  const dayChanged = day !== session.day;
+  const timeChanged = slot.startMin !== session.startMin || slot.endMin !== session.endMin;
+  const roomChanged = room !== session.room;
+  const lecturerChanged = lecturer !== session.lecturer;
+  const slotLabel = `${day} ${minutesToLabel(slot.startMin)} - ${minutesToLabel(slot.endMin)}`;
+
+  const changes: string[] = [];
+  if (dayChanged) changes.push(`day → ${day}`);
+  if (timeChanged) changes.push(`time → ${minutesToLabel(slot.startMin)}`);
+  if (roomChanged) changes.push(`room → ${room ?? "TBA"}`);
+  if (lecturerChanged) changes.push(`lecturer → ${lecturer ?? "TBA"}`);
+
+  // Prefer the smallest disruption: same room and lecturer beats a room move,
+  // which beats reassigning the class; earlier slots break ties.
+  let score = 1_000;
+  if (!roomChanged) score += 400;
+  if (!lecturerChanged) score += 800;
+  if (!dayChanged) score += 60;
+  if (capacityWarning === null) score += 120;
+  score += Math.max(0, 900 - slot.startMin) / 10;
+
+  return {
+    day,
+    startMin: slot.startMin,
+    endMin: slot.endMin,
+    room,
+    lecturer,
+    slotLabel,
+    label: changes.length ? `${slotLabel} · ${changes.join(", ")}` : slotLabel,
+    changes,
+    dayChanged,
+    timeChanged,
+    roomChanged,
+    lecturerChanged,
+    capacityWarning,
+    score: round(score),
+    recommended: false,
+  };
+}
+
+/**
+ * Why no plan could be found — checked in the order a scheduler would, so the
+ * message names the real blocker rather than the first rule that happened to fire.
+ */
+export function rescheduleBlockers(
+  session: Session,
+  sessions: Session[],
+  opts: ReschedulePlanOptions = {},
+): string[] {
+  const reasons: string[] = [];
+  const termRows = sessions.filter((s) => s.term === session.term);
+  const slots = termSlots(termRows);
+  const days = DAY_ORDER.filter((d) => termRows.some((s) => s.day === d));
+
+  if (slots.length === 0 || days.length === 0) {
+    return ["This term has no other scheduled day or time slot to move the class to."];
+  }
+  if (session.day === null || session.startMin === null || session.endMin === null) {
+    return ["This session has no valid day/time, so it can't be moved until that is fixed."];
+  }
+
+  // Which rule blocks every single slot? Only probe days the programme is
+  // actually allowed to use, so the reason names the real obstacle rather than
+  // the day rule that merely narrows the search.
+  const counts = new Map<string, number>();
+  const baseline = baselineKinds(session, sessions, opts);
+  const allowedDays = days.filter((d) =>
+    requiresSaturday(session.programme) ? d === "SAT" : !(d === "SAT" && forbiddenOnSaturday(session.programme)),
+  );
+  const probeDays = allowedDays.length > 0 ? allowedDays : days;
+  let probes = 0;
+  for (const day of probeDays) {
+    for (const slot of day === "SAT" ? saturdaySlots(slots, session, opts) : slots) {
+      const placement: Placement = { ...placementOf(session), day, startMin: slot.startMin, endMin: slot.endMin };
+      const errs = blockingErrors(
+        validatePlacement(session.rowId, placement, sessions, opts),
+        session,
+        { room: session.room, lecturer: session.lecturer },
+        baseline,
+      );
+      probes += 1;
+      for (const kind of new Set(errs.map((e) => e.kind))) {
+        counts.set(kind, (counts.get(kind) ?? 0) + 1);
+      }
+    }
+  }
+  const label: Record<string, string> = {
+    room: `room ${session.room ?? "?"} is occupied`,
+    lecturer: `${session.lecturer ?? "the lecturer"} is already teaching`,
+    cohort: `cohort ${session.batchCode ?? "?"} is already in class`,
+    workload: "the weekly workload limit would be exceeded",
+    consecutive: "the consecutive-teaching-hours limit would be exceeded",
+    max_per_day: "the per-day class limit would be exceeded",
+    faculty_rule: "the full-time Friday 4–6 PM block applies",
+    programme_rule: "the programme's day rule (UG≠Sat, PG=Sat) applies",
+    time_window: "the slot falls outside the Saturday teaching window",
+    capacity: "no room with enough capacity is free",
+  };
+
+  // Rank the rules by how many alternatives they rule out, so the message names
+  // the real obstacle rather than an incidental one.
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const dominant = ranked.filter(([, n]) => n === probes).map(([kind]) => label[kind] ?? kind);
+
+  if (dominant.length > 0) {
+    reasons.push(`In every one of the ${probes} alternative slots, ${dominant.join(" and ")}.`);
+  } else if (ranked.length > 0) {
+    const top = ranked
+      .slice(0, 2)
+      .map(([kind, n]) => `${label[kind] ?? kind} (${n} of ${probes} slots)`);
+    reasons.push(`No slot is completely free: ${top.join("; ")}.`);
+  } else {
+    reasons.push(
+      "No single slot is free for this class as it stands — try a different room or lecturer as part of the move.",
+    );
+  }
+
+  if (counts.get("cohort") === probes) {
+    reasons.push(
+      "Because the students themselves are booked all week, this one needs a timetable change for the cohort — splitting the class or freeing one of their other sessions.",
+    );
+  }
+  return reasons;
+}
+
+/** Apply a validated plan: day, time, room and lecturer in one atomic edit. */
+export function applyReschedulePlan(
+  sessions: Session[],
+  rowId: number,
+  plan: Pick<ReschedulePlan, "day" | "startMin" | "endMin" | "room" | "lecturer">,
+): Session[] {
+  return sessions.map((s) => {
+    if (s.rowId !== rowId) return s;
+    return finalizeSession({
+      ...s,
+      day: plan.day,
+      dayRaw: plan.day,
+      startMin: plan.startMin,
+      endMin: plan.endMin,
+      room: plan.room,
+      lecturer: plan.lecturer,
+      lecturerRaw: plan.lecturer,
+    });
+  });
 }
 
 export function applyReschedule(

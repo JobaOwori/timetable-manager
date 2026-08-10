@@ -1,11 +1,30 @@
 // Day x Time-slot grid builder for the Timetable views.
+//
+// A cell holds structured ENTRIES rather than a blob of text, so each view can
+// lay out the course code, course name and the supporting detail (lecturer,
+// room, programmes/cohorts) properly instead of cramming them onto one line.
 import { DAY_ORDER, DayCode, Session } from "./types";
 import { formatTimeRange, isBlank } from "./clean";
+import { summarise } from "./classDetails";
+
+export type CellField = "unitCode" | "unitName" | "room" | "lecturer" | "programme" | "cohort";
+
+export interface GridEntry {
+  rowId: number;
+  unitCode: string | null;
+  unitName: string | null;
+  programme: string | null;
+  /** Everything else worth showing, already formatted: "Rm 301 · J KAWUKI · BSCCS". */
+  secondary: string;
+  /** Full one-line description, used for tooltips and plain-text renderers. */
+  text: string;
+}
 
 export interface GridCell {
-  text: string;
+  text: string; // newline-joined entries (kept for simple/legacy renderers)
   clash: boolean;
   rowIds: number[];
+  entries: GridEntry[];
 }
 
 export interface Grid {
@@ -14,20 +33,51 @@ export interface Grid {
   cells: Record<string, Record<string, GridCell>>; // slot -> day -> cell
 }
 
-export type CellField = "unitCode" | "room" | "lecturer" | "programme";
+/** All programmes attending a session, including any merged into it. */
+function programmesOf(s: Session): string[] {
+  return [
+    ...new Set([s.programme, ...(s.merged?.programmes ?? [])].filter((x): x is string => !!x)),
+  ].sort();
+}
 
-function cellText(s: Session, fields: CellField[]): string {
-  const parts: string[] = [];
-  if (fields.includes("unitCode") && !isBlank(s.unitCode)) parts.push(String(s.unitCode));
-  if (fields.includes("room") && !isBlank(s.room)) parts.push(`Rm ${s.room}`);
-  if (fields.includes("lecturer") && !isBlank(s.lecturer)) parts.push(String(s.lecturer));
-  if (fields.includes("programme") && !isBlank(s.programme)) parts.push(String(s.programme));
-  return parts.length ? parts.join(" \u00b7 ") : "(unlabeled)";
+/** All cohorts attending a session, including any merged into it. */
+function cohortsOf(s: Session): string[] {
+  return [
+    ...new Set([s.batchCode, ...(s.merged?.batchCodes ?? [])].filter((x): x is string => !!x)),
+  ].sort();
+}
+
+function buildEntry(s: Session, fields: CellField[]): GridEntry {
+  const secondary: string[] = [];
+  if (fields.includes("room") && !isBlank(s.room)) secondary.push(`Rm ${s.room}`);
+  if (fields.includes("lecturer")) secondary.push(String(s.lecturer ?? "TBA"));
+  if (fields.includes("programme")) {
+    const progs = programmesOf(s);
+    if (progs.length) secondary.push(summarise(progs));
+  }
+  if (fields.includes("cohort")) {
+    const cohorts = cohortsOf(s);
+    if (cohorts.length) secondary.push(summarise(cohorts));
+  }
+
+  const head: string[] = [];
+  if (fields.includes("unitCode") && !isBlank(s.unitCode)) head.push(String(s.unitCode));
+  if (fields.includes("unitName") && !isBlank(s.unitName)) head.push(String(s.unitName));
+
+  const text = [...head, ...secondary].join(" \u00b7 ") || "(unlabeled)";
+  return {
+    rowId: s.rowId,
+    unitCode: s.unitCode,
+    unitName: s.unitName,
+    programme: s.programme,
+    secondary: secondary.join(" \u00b7 "),
+    text,
+  };
 }
 
 export function buildGrid(
   sessions: Session[],
-  fields: CellField[] = ["unitCode", "room", "lecturer"],
+  fields: CellField[] = ["unitCode", "unitName", "room", "lecturer"],
 ): Grid {
   const valid = sessions.filter((s) => s.day !== null && s.startMin !== null && s.endMin !== null);
   const slotOrder: { slot: string; start: number }[] = [];
@@ -46,7 +96,7 @@ export function buildGrid(
   const cells: Record<string, Record<string, GridCell>> = {};
   for (const slot of slots) {
     cells[slot] = {};
-    for (const day of days) cells[slot][day] = { text: "", clash: false, rowIds: [] };
+    for (const day of days) cells[slot][day] = { text: "", clash: false, rowIds: [], entries: [] };
   }
   const buckets = new Map<string, Session[]>();
   for (const s of valid) {
@@ -58,11 +108,12 @@ export function buildGrid(
   }
   for (const [key, subs] of buckets) {
     const [slot, day] = key.split("||");
-    const clash = subs.length > 1;
+    const entries = subs.map((s) => buildEntry(s, fields));
     cells[slot][day] = {
-      text: subs.map((s) => cellText(s, fields)).join("\n"),
-      clash,
+      text: entries.map((e) => e.text).join("\n"),
+      clash: subs.length > 1,
       rowIds: subs.map((s) => s.rowId),
+      entries,
     };
   }
   return { slots, days, cells };

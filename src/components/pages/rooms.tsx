@@ -76,7 +76,7 @@ function RoomDrilldown() {
   const hcVals = mine.map((s) => s.headCount).filter((h): h is number => h !== null);
   const avgHc = hcVals.length ? hcVals.reduce((a, b) => a + b, 0) / hcVals.length : null;
   const util = cap && avgHc !== null ? Math.round((avgHc / cap) * 100) : null;
-  const grid = useMemo(() => buildGrid(mine, ["unitCode", "lecturer"]), [mine]);
+  const grid = useMemo(() => buildGrid(mine, ["unitCode", "unitName", "lecturer", "programme"]), [mine]);
   const capRows = useMemo(
     () => capacityAnalysis(mine, roomRegistry, thresholds.underutilPct, thresholds.capacityTolerance).filter((c) => c.capacityStatus !== "OK"),
     [mine, roomRegistry, thresholds],

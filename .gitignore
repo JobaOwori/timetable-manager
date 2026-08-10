@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# e2e artifacts — the fixture is a REAL timetable (staff names, enrolment) and the
+# screenshots are regenerated test output. Neither belongs in a public repo.
+/e2e/fixtures/
+/e2e/shots/

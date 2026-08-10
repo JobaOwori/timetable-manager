@@ -61,3 +61,39 @@ body {
 *::-webkit-scrollbar { width: 9px; height: 9px; }
 *::-webkit-scrollbar-thumb { background: rgb(var(--rule) / 0.7); border-radius: 6px; }
 *::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- Faculty / department colour coding -------------------------------
+   Components set only the hue (--chip-h); lightness + alpha are resolved
+   here so the same label reads correctly in both themes.                  */
+.chip-color {
+  background: hsl(var(--chip-h) 70% 48% / 0.14);
+  border-color: hsl(var(--chip-h) 55% 42% / 0.45);
+  color: hsl(var(--chip-h) 65% 30%);
+}
+.dark .chip-color {
+  background: hsl(var(--chip-h) 65% 62% / 0.18);
+  border-color: hsl(var(--chip-h) 55% 62% / 0.45);
+  color: hsl(var(--chip-h) 72% 74%);
+}
+
+.dot-color {
+  background: hsl(var(--chip-h) 62% 44%);
+}
+.dark .dot-color {
+  background: hsl(var(--chip-h) 62% 64%);
+}
+
+.stripe-color {
+  border-left: 3px solid hsl(var(--chip-h) 62% 46%);
+}
+.dark .stripe-color {
+  border-left-color: hsl(var(--chip-h) 62% 62%);
+}
+
+/* Highlighted search matches inside tables and the timetable grid. */
+mark.hit {
+  background: rgb(var(--brass) / 0.32);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}

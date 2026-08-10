@@ -16,6 +16,8 @@ export function DataTable<T>({
   empty = "No rows.",
   rowClassName,
   dense,
+  onRowContextMenu,
+  rowTitle,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -23,6 +25,9 @@ export function DataTable<T>({
   empty?: string;
   rowClassName?: (row: T) => string;
   dense?: boolean;
+  /** Right-click handler — enables an in-place actions menu for the row. */
+  onRowContextMenu?: (e: React.MouseEvent, row: T) => void;
+  rowTitle?: (row: T) => string;
 }) {
   if (!rows.length) {
     return <div className="px-3 py-6 text-center text-muted text-sm">{empty}</div>;
@@ -50,8 +55,11 @@ export function DataTable<T>({
           {rows.map((row, i) => (
             <tr
               key={rowKey(row, i)}
+              onContextMenu={onRowContextMenu ? (e) => onRowContextMenu(e, row) : undefined}
+              title={rowTitle?.(row)}
               className={cn(
                 "border-b border-rule/60 last:border-0 hover:bg-surface-2/40 transition-colors",
+                onRowContextMenu && "cursor-context-menu",
                 rowClassName?.(row),
               )}
             >

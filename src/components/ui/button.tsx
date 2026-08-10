@@ -51,17 +51,20 @@ export function Select({
   options,
   className,
   placeholder,
+  ariaLabel,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
   className?: string;
   placeholder?: string;
+  ariaLabel?: string;
 }) {
   return (
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      aria-label={ariaLabel}
       className={cn(
         "rounded border border-rule bg-surface text-content text-sm px-2.5 py-1.5 outline-none focus:border-brass focus:ring-1 focus:ring-brass/40",
         className,

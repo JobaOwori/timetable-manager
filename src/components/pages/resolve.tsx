@@ -3,8 +3,9 @@
 import { useMemo, useState } from "react";
 import {
   ArrowRightLeft, CheckCircle2, DoorOpen, User, Users, Clock, Wand2, Info, Loader2, ShieldAlert,
+  Merge, Link2,
 } from "lucide-react";
-import { useFilteredSessions, useAnalysis } from "@/store/selectors";
+import { useFilteredSessions, useAnalysis, useMergeableGroups } from "@/store/selectors";
 import { useStore } from "@/store/useStore";
 import { Card, EmptyState, SectionTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +15,8 @@ import { ResolutionPanel } from "@/components/resolution-panel";
 import { FacultyTypeBadge } from "@/components/ui/faculty-badge";
 import { ResolveResult } from "@/lib/resolve";
 import { detectRuleViolations } from "@/lib/validate";
-import { facultyTypeOf } from "@/lib/facultyType";
+import { effectiveFacultyType } from "@/lib/facultyType";
+import { MergeGroup, mergeableGroupsTouching } from "@/lib/merge";
 import { toast } from "@/store/useToast";
 
 type Filter = "all" | "lecturer" | "room" | "batch_code";
@@ -127,6 +129,8 @@ export function ResolvePage() {
       </div>
 
       {result && <ResolveReport result={result} onDismiss={() => setResult(null)} />}
+
+      <MergeSimilarCourses sessions={termSessions} />
 
       <PolicyViolations sessions={termSessions} opts={opts} />
 
@@ -267,6 +271,109 @@ function groupUnresolved(unresolved: ResolveResult["unresolved"]): UnresolvedRea
   return [...groups.values()].sort((a, b) => b.total - a.total || a.reason.localeCompare(b.reason));
 }
 
+/** Announce the result of merging duplicate rows. */
+function announceMerge(removed: number, merged: number) {
+  if (merged === 0) {
+    toast.info("No duplicate course rows left to merge.");
+    return;
+  }
+  toast.success(
+    `Merged ${merged} duplicate course group${merged === 1 ? "" : "s"} — ${removed} redundant row${
+      removed === 1 ? "" : "s"
+    } removed and their conflicts cleared.`,
+    "Courses merged",
+    { action: { label: "Undo", onClick: () => useStore.getState().undo() }, duration: 9000 },
+  );
+}
+
+/**
+ * "Merge similar courses": course units with the same or very similar names,
+ * taught by the SAME lecturer in the SAME room at the SAME time are one
+ * teaching session that the sheet listed more than once. Merging collapses each
+ * group into a single session, so the conflicts they raise disappear for good.
+ */
+function MergeSimilarCourses({ sessions }: { sessions: Session[] }) {
+  const groups = useMergeableGroups(sessions);
+  const mergeSessions = useStore((s) => s.mergeSessions);
+  const mergeAll = useStore((s) => s.mergeAllSimilarCourses);
+  const [expanded, setExpanded] = useState(false);
+
+  if (groups.length === 0) return null;
+
+  const duplicateRows = groups.reduce((a, g) => a + g.rowIds.length - 1, 0);
+  const shown = expanded ? groups : groups.slice(0, 4);
+
+  return (
+    <Card className="overflow-hidden border-info/40">
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-info/10 border-b border-info/30 flex-wrap">
+        <Link2 size={15} className="text-info" />
+        <span className="font-medium text-ink text-sm">Similar courses that can be merged</span>
+        <Badge tone="info">{groups.length}</Badge>
+        <span className="text-xs text-muted">
+          {duplicateRows} duplicate row{duplicateRows === 1 ? "" : "s"} — same lecturer, room and time
+        </span>
+        <Button
+          size="sm"
+          variant="primary"
+          className="ml-auto"
+          onClick={() => {
+            const r = mergeAll();
+            announceMerge(r.removed, r.merged);
+          }}
+        >
+          <Merge size={13} /> Merge all similar courses
+        </Button>
+      </div>
+
+      <div className="flex items-start gap-1.5 px-4 py-2 text-xs text-content bg-surface-2/20 border-b border-rule/60">
+        <Info size={13} className="text-info mt-0.5 shrink-0" />
+        <span>
+          These rows describe ONE teaching session listed under slightly different unit names (e.g.
+          “Research Methods” and “Business Research Methods”). Merging keeps a single session with the
+          combined enrolment and removes the redundant rows — and with them, the conflicts they caused.
+        </span>
+      </div>
+
+      <div className="divide-y divide-rule/60">
+        {shown.map((g) => (
+          <MergeGroupRow key={g.key} group={g} onMerge={() => announceMerge(mergeSessions(g.rowIds), 1)} />
+        ))}
+      </div>
+
+      {groups.length > 4 && (
+        <button
+          type="button"
+          onClick={() => setExpanded((x) => !x)}
+          className="w-full border-t border-rule/60 px-4 py-2 text-xs text-muted hover:text-ink transition"
+        >
+          {expanded ? "Show less" : `Show all ${groups.length} groups`}
+        </button>
+      )}
+    </Card>
+  );
+}
+
+function MergeGroupRow({ group, onMerge }: { group: MergeGroup; onMerge: () => void }) {
+  return (
+    <div className="flex items-start gap-3 px-4 py-2.5 text-sm">
+      <div className="flex-1 min-w-0">
+        <div className="text-ink truncate">
+          <span className="font-mono font-medium">{group.unitCodes.join(" + ") || `#${group.rowIds.join(", #")}`}</span>
+          <span className="text-muted"> · {group.unitNames.join("  ·  ")}</span>
+        </div>
+        <div className="text-xs text-muted mt-0.5">{group.reason}</div>
+        <div className="text-[0.68rem] text-muted/90 mt-0.5">
+          {group.day} · {group.time} · Rm {group.room ?? "—"} · {group.lecturer} ·{" "}
+          {group.programmes.join(", ") || "—"} · combined head count {group.headCount}
+        </div>
+      </div>
+      <Button size="sm" variant="primary" onClick={onMerge} title="Merge these rows into one session">
+        <Merge size={13} /> Merge
+      </Button>
+    </div>
+  );
+}
+
 interface ConflictGroup {
   key: string;
   clashType: Clash["clashType"];
@@ -275,7 +382,6 @@ interface ConflictGroup {
   rowIds: number[];
   clashes: Clash[];
 }
-
 function groupClashes(clashes: Clash[]): ConflictGroup[] {
   const map = new Map<string, ConflictGroup>();
   for (const c of clashes) {
@@ -324,6 +430,7 @@ const TYPE_META = {
 function ConflictCard({ group }: { group: ConflictGroup }) {
   const sessions = useStore((s) => s.sessions);
   const autoResolve = useStore((s) => s.autoResolve);
+  const mergeSessions = useStore((s) => s.mergeSessions);
   const opts = useResolveOpts();
   const meta = TYPE_META[group.clashType];
   const rows = group.rowIds
@@ -331,6 +438,12 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
     .filter((s): s is Session => !!s);
   const [resolvingRow, setResolvingRow] = useState<number | null>(null);
   const [resolvingGroup, setResolvingGroup] = useState(false);
+
+  // Rows of this conflict that are actually ONE teaching session listed twice.
+  const mergeable = useMemo(
+    () => mergeableGroupsTouching(sessions, group.rowIds),
+    [sessions, group.rowIds],
+  );
 
   const resolveGroup = () => {
     if (resolvingGroup) return;
@@ -348,6 +461,12 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
     }, 0));
   };
 
+  const mergeGroup = () => {
+    let removed = 0;
+    for (const g of mergeable) removed += mergeSessions(g.rowIds);
+    announceMerge(removed, mergeable.length);
+  };
+
   if (rows.length < 2) return null; // group already cleared by a prior fix
 
   return (
@@ -362,23 +481,45 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
           <Clock size={12} /> {group.day}
         </span>
         <span className="text-xs text-muted">{rows.length} sessions in conflict</span>
-        <Button size="sm" variant="outline" className="ml-auto" onClick={resolveGroup} disabled={resolvingGroup}>
-          {resolvingGroup ? (
-            <>
-              <Loader2 size={12} className="animate-spin" /> Resolving…
-            </>
-          ) : (
-            <>
-              <Wand2 size={12} /> Auto-fix this
-            </>
+        <div className="ml-auto flex items-center gap-2">
+          {mergeable.length > 0 && (
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={mergeGroup}
+              title={mergeable[0].reason}
+            >
+              <Merge size={12} /> Merge similar
+            </Button>
           )}
-        </Button>
+          <Button size="sm" variant="outline" onClick={resolveGroup} disabled={resolvingGroup}>
+            {resolvingGroup ? (
+              <>
+                <Loader2 size={12} className="animate-spin" /> Resolving…
+              </>
+            ) : (
+              <>
+                <Wand2 size={12} /> Auto-fix this
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-start gap-1.5 px-4 py-2 text-xs text-content bg-surface-2/20 border-b border-rule/60">
         <Info size={13} className="text-brass mt-0.5 shrink-0" />
         <span>{meta.explain(group.groupValue, group.day)}</span>
       </div>
+
+      {mergeable.length > 0 && (
+        <div className="flex items-start gap-1.5 px-4 py-2 text-xs text-content bg-info/10 border-b border-info/25">
+          <Link2 size={13} className="text-info mt-0.5 shrink-0" />
+          <span>
+            <span className="font-medium text-ink">Not a real conflict?</span> {mergeable[0].reason}{" "}
+            Merge to keep one session and clear this automatically.
+          </span>
+        </div>
+      )}
 
       <div className="divide-y divide-rule/60">
         {rows.map((s) => (
@@ -404,20 +545,28 @@ function SessionRow({
   onToggle: () => void;
 }) {
   const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
-  const ft = session.lecturer ? facultyTypeOf(session.lecturer, facultyTypeRegistry) : null;
+  const roleRegistry = useStore((s) => s.roleRegistry);
+  const ft = session.lecturer ? effectiveFacultyType(session.lecturer, roleRegistry, facultyTypeRegistry) : null;
+  // Show every programme/cohort attending, including any merged into this row.
+  const programmes = [
+    ...new Set([session.programme, ...(session.merged?.programmes ?? [])].filter((x): x is string => !!x)),
+  ].sort();
+  const cohorts = [
+    ...new Set([session.batchCode, ...(session.merged?.batchCodes ?? [])].filter((x): x is string => !!x)),
+  ].sort();
   return (
     <div>
       <div className="flex items-center gap-3 px-4 py-2.5 text-sm">
         <span className="font-mono text-xs text-muted w-8 shrink-0">#{session.rowId}</span>
         <div className="flex-1 min-w-0">
           <div className="text-ink truncate">
-            <span className="font-medium">{session.unitCode}</span>
+            <span className="font-medium font-mono">{session.unitCode}</span>
             <span className="text-muted"> {session.unitName}</span>
           </div>
           <div className="text-xs text-muted truncate flex items-center gap-1.5">
             <span className="truncate">
-              {session.programme} · {session.batchCode} · {session.timeRaw} · Rm {session.room ?? "—"} ·{" "}
-              {session.lecturer ?? "TBA"}
+              {programmes.join(", ") || "—"} · {cohorts.join(", ") || "—"} · {session.timeRaw} · Rm{" "}
+              {session.room ?? "—"} · {session.lecturer ?? "TBA"}
             </span>
             {ft && <FacultyTypeBadge type={ft} />}
           </div>
@@ -439,12 +588,14 @@ const RULE_META: Record<string, { label: string; tone: "danger" | "warn" | "info
   max_per_day: { label: "Too many sessions in a day", tone: "warn" },
   faculty_rule: { label: "Full-Time Friday 4–6 PM block", tone: "danger" },
   programme_rule: { label: "Programme day rule (UG≠Sat, PG=Sat)", tone: "info" },
+  time_window: { label: "Outside the Saturday 9 AM–4 PM window", tone: "danger" },
 };
 
 /**
  * Lists sessions that break an institutional POLICY (not a double-booking):
- * per-day session cap, the full-time Friday-evening block, and the UG/PG Saturday
- * rules — each fixable in place (rescheduling only offers compliant slots).
+ * per-day session cap, the full-time Friday-evening block, the UG/PG Saturday
+ * rules, and the Saturday 9 AM–4 PM teaching window — each fixable in place
+ * (rescheduling only offers compliant slots).
  */
 function PolicyViolations({
   sessions,

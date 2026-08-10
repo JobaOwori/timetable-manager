@@ -13,10 +13,11 @@ import {
   Session,
   Thresholds,
 } from "@/lib/types";
-import { ROLE_MAX_HOURS } from "@/lib/roles";
-import { applyRoomChange, applyReschedule, applyTransfer } from "@/lib/transfer";
+import { ROLE_MAX_HOURS, withRoleDefaults, canBePartTime, DEFAULT_ROLE } from "@/lib/roles";
+import { applyRoomChange, applyReschedule, applyReschedulePlan, applyTransfer, ReschedulePlan } from "@/lib/transfer";
 import { finalizeSession } from "@/lib/ingest";
 import { applyFacultyMerge, facultyDedupMap, mergeLecturer } from "@/lib/faculty";
+import { applyMerge, mergeAllSimilar } from "@/lib/merge";
 import { autoResolve, AutoResolveOptions, ResolveResult } from "@/lib/resolve";
 import { IngestResult } from "@/lib/pipeline";
 import { ingestFile } from "@/lib/ingest-client";
@@ -44,6 +45,7 @@ interface State {
   fRooms: string[];
   fDays: string[];
   fDepartments: string[];
+  search: string;
 
   history: Snapshot[]; // undo stack (most recent last)
 
@@ -53,17 +55,25 @@ interface State {
   setRoomRegistry: (r: RoomRegistry) => void;
   setRole: (lecturer: string, role: string) => void;
   setRoleMaxHours: (r: RoleMaxHours) => void;
+  setRoleMaxHoursFor: (role: string, hours: number) => void;
+  resetRoleMaxHours: () => void;
   setDepartment: (programme: string, dept: string) => void;
   setThreshold: <K extends keyof Thresholds>(k: K, v: Thresholds[K]) => void;
+  resetThresholds: () => void;
   setFilter: (key: "fPrograms" | "fLecturers" | "fRooms" | "fDays" | "fDepartments", v: string[]) => void;
+  setSearch: (q: string) => void;
+  clearFilters: () => void;
   assignSubject: (lecturer: string, unitCode: string) => void;
   unassignSubject: (lecturer: string, unitCode: string) => void;
   setFacultyType: (lecturer: string, type: FacultyType) => void;
   mergeFaculty: (from: string, to: string) => void;
   dedupeFaculty: () => number;
+  mergeSessions: (rowIds: number[]) => number;
+  mergeAllSimilarCourses: () => { merged: number; removed: number };
   transferLecturer: (rowId: number, newLecturer: string) => void;
   changeRoom: (rowId: number, newRoom: string) => void;
   reschedule: (rowId: number, day: DayCode, startMin: number, endMin: number) => void;
+  applyPlan: (rowId: number, plan: ReschedulePlan) => void;
   autoResolve: (opts: AutoResolveOptions, run?: Parameters<typeof autoResolve>[2]) => ResolveResult;
   updateSession: (rowId: number, patch: Partial<Session>) => void;
   resetEdits: () => void;
@@ -141,7 +151,7 @@ function applyResult(name: string, r: IngestResult) {
     activeTerm: r.terms[0] ?? null,
     history: [] as Snapshot[],
     fPrograms: [] as string[], fLecturers: [] as string[], fRooms: [] as string[],
-    fDays: [] as string[], fDepartments: [] as string[],
+    fDays: [] as string[], fDepartments: [] as string[], search: "",
   };
 }
 
@@ -154,11 +164,11 @@ export const useStore = create<State>((set, get) => ({
   sessions: [],
   roomRegistry: {},
   roleRegistry: {},
-  roleMaxHours: loadPersisted().roleMaxHours ?? { ...ROLE_MAX_HOURS },
+  roleMaxHours: withRoleDefaults(loadPersisted().roleMaxHours),
   departmentRegistry: {},
   subjectAssignments: {},
   facultyTypeRegistry: {},
-  thresholds: loadPersisted().thresholds ?? { ...DEFAULT_THRESHOLDS },
+  thresholds: { ...DEFAULT_THRESHOLDS, ...(loadPersisted().thresholds ?? {}) },
   activeTerm: null,
   terms: [],
   history: [],
@@ -167,6 +177,7 @@ export const useStore = create<State>((set, get) => ({
   fRooms: [],
   fDays: [],
   fDepartments: [],
+  search: "",
 
   loadArrayBuffer: async (buf, name) => {
     set({ loading: true, loadError: null, fileName: name });
@@ -194,13 +205,37 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  setActiveTerm: (t) => set({ activeTerm: t, fPrograms: [], fLecturers: [], fRooms: [], fDays: [], fDepartments: [] }),
+  setActiveTerm: (t) => set({ activeTerm: t, fPrograms: [], fLecturers: [], fRooms: [], fDays: [], fDepartments: [], search: "" }),
   setRoomRegistry: (r) => set({ roomRegistry: r }),
   setRole: (lecturer, role) =>
-    set((s) => ({ roleRegistry: { ...s.roleRegistry, [lecturer]: role } })),
+    set((s) => {
+      const roleRegistry = { ...s.roleRegistry, [lecturer]: role };
+      // Only a Lecturer may be Part-Time — taking a substantive role makes the
+      // person Full-Time automatically, so the two registries never disagree.
+      const facultyTypeRegistry = { ...s.facultyTypeRegistry };
+      if (!canBePartTime(role) && facultyTypeRegistry[lecturer] === "PT") {
+        facultyTypeRegistry[lecturer] = "FT";
+        toast.info(
+          `${lecturer} is now Full-Time — only the Lecturer role can be Part-Time.`,
+          "Employment adjusted",
+        );
+      }
+      return { history: pushSnap(s), roleRegistry, facultyTypeRegistry };
+    }),
   setRoleMaxHours: (r) => {
     persist({ ...loadPersisted(), roleMaxHours: r });
     set({ roleMaxHours: r });
+  },
+  setRoleMaxHoursFor: (role, hours) =>
+    set((s) => {
+      const roleMaxHours = { ...s.roleMaxHours, [role]: hours };
+      persist({ ...loadPersisted(), roleMaxHours });
+      return { roleMaxHours };
+    }),
+  resetRoleMaxHours: () => {
+    const roleMaxHours = { ...ROLE_MAX_HOURS };
+    persist({ ...loadPersisted(), roleMaxHours });
+    set({ roleMaxHours });
   },
   setDepartment: (programme, dept) =>
     set((s) => ({ departmentRegistry: { ...s.departmentRegistry, [programme.toUpperCase()]: dept } })),
@@ -210,7 +245,15 @@ export const useStore = create<State>((set, get) => ({
       persist({ ...loadPersisted(), thresholds });
       return { thresholds };
     }),
+  resetThresholds: () => {
+    const thresholds = { ...DEFAULT_THRESHOLDS };
+    persist({ ...loadPersisted(), thresholds });
+    set({ thresholds });
+  },
   setFilter: (key, v) => set({ [key]: v } as Pick<State, typeof key>),
+  setSearch: (q) => set({ search: q }),
+  clearFilters: () =>
+    set({ fPrograms: [], fLecturers: [], fRooms: [], fDays: [], fDepartments: [], search: "" }),
 
   assignSubject: (lecturer, unitCode) =>
     set((s) => {
@@ -226,6 +269,14 @@ export const useStore = create<State>((set, get) => ({
     }),
   setFacultyType: (lecturer, type) =>
     set((s) => {
+      const role = s.roleRegistry[lecturer] ?? DEFAULT_ROLE;
+      if (type === "PT" && !canBePartTime(role)) {
+        toast.warn(
+          `${lecturer} is ${role}. Only the Lecturer role can be Part-Time — change the role first.`,
+          "Part-Time not allowed",
+        );
+        return {};
+      }
       if ((s.facultyTypeRegistry[lecturer] ?? "FT") === type) return {};
       return { history: pushSnap(s), facultyTypeRegistry: { ...s.facultyTypeRegistry, [lecturer]: type } };
     }),
@@ -267,12 +318,27 @@ export const useStore = create<State>((set, get) => ({
     return count;
   },
 
+  /** Collapse duplicate rows of ONE teaching session into a single session. */
+  mergeSessions: (rowIds) => {
+    const before = get().sessions.length;
+    set((s) => ({ history: pushSnap(s), sessions: applyMerge(s.sessions, rowIds) }));
+    return before - get().sessions.length;
+  },
+  /** Merge every mergeable "similar course" group in the timetable at once. */
+  mergeAllSimilarCourses: () => {
+    const r = mergeAllSimilar(get().sessions);
+    if (r.merged === 0) return { merged: 0, removed: 0 };
+    set((s) => ({ history: pushSnap(s), sessions: r.sessions }));
+    return { merged: r.merged, removed: r.removed };
+  },
+
   transferLecturer: (rowId, newLecturer) =>
-    set((s) => ({ history: pushSnap(s), sessions: applyTransfer(s.sessions, rowId, newLecturer) })),
-  changeRoom: (rowId, newRoom) =>
+    set((s) => ({ history: pushSnap(s), sessions: applyTransfer(s.sessions, rowId, newLecturer) })),  changeRoom: (rowId, newRoom) =>
     set((s) => ({ history: pushSnap(s), sessions: applyRoomChange(s.sessions, rowId, newRoom) })),
   reschedule: (rowId, day, startMin, endMin) =>
     set((s) => ({ history: pushSnap(s), sessions: applyReschedule(s.sessions, rowId, day, startMin, endMin) })),
+  applyPlan: (rowId, plan) =>
+    set((s) => ({ history: pushSnap(s), sessions: applyReschedulePlan(s.sessions, rowId, plan) })),
   autoResolve: (opts, run) => {
     const result = autoResolve(get().sessions, opts, run);
     set((s) => ({ history: pushSnap(s), sessions: result.sessions }));

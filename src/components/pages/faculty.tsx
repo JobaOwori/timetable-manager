@@ -1,14 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Users2, Plus, X, ArrowRightLeft, BookOpen } from "lucide-react";
+import { Users2, Plus, X, ArrowRightLeft, BookOpen, MousePointerClick, Search } from "lucide-react";
 import { useFilteredSessions, useTermSessions } from "@/store/selectors";
 import { useStore } from "@/store/useStore";
 import { facultyReport } from "@/lib/analysis";
 import { detectDuplicateFaculty, distinctUnits } from "@/lib/faculty";
 import { buildGrid } from "@/lib/grid";
-import { maxHoursForRole, DEFAULT_ROLE } from "@/lib/roles";
-import { FACULTY_TYPE_LABEL, FACULTY_TYPE_OPTIONS, facultyTypeOf, workloadStatus } from "@/lib/facultyType";
+import { maxHoursFor, DEFAULT_ROLE, ASSIGNABLE_ROLES, ROLE_DESCRIPTIONS, PART_TIME_ROLE, canBePartTime } from "@/lib/roles";
+import {
+  FACULTY_TYPE_LABEL, FACULTY_TYPE_OPTIONS, effectiveFacultyType, workloadStatus,
+} from "@/lib/facultyType";
 import { departmentFor } from "@/lib/departments";
 import { Card, SectionTitle, EmptyState } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,12 +18,74 @@ import { Button, Select } from "@/components/ui/button";
 import { DataTable, Column } from "@/components/ui/data-table";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { FacultyTypeBadge } from "@/components/ui/faculty-badge";
+import { DepartmentList } from "@/components/ui/department-badge";
+import { ContextMenu, MenuEntry, useContextMenu } from "@/components/ui/context-menu";
 import { GridView } from "@/components/ui/grid-view";
 import { LecturerTransferPanel } from "@/components/resolution-panel";
 import { FacultyAnalytics } from "@/components/faculty-charts";
 import { toast } from "@/store/useToast";
 import { fmtHours } from "@/lib/cn";
 import type { FacultyReportRow } from "@/lib/analysis";
+import type { FacultyType } from "@/lib/types";
+
+const undoToast = {
+  action: { label: "Undo", onClick: () => useStore.getState().undo() },
+  duration: 9000,
+};
+
+/**
+ * Build the right-click menu for one lecturer: assign a staff role (Lecturer,
+ * H.O.D., Dean, DAA, AR…) or switch them between Full-Time and Part-Time —
+ * both of which drive their weekly workload cap and daily class limit.
+ */
+export function useStaffRoleMenu() {
+  const setRole = useStore((s) => s.setRole);
+  const setFacultyType = useStore((s) => s.setFacultyType);
+  const roleRegistry = useStore((s) => s.roleRegistry);
+  const roleMaxHours = useStore((s) => s.roleMaxHours);
+  const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
+
+  return (lecturer: string): MenuEntry[] => {
+    const role = roleRegistry[lecturer] ?? DEFAULT_ROLE;
+    const type = effectiveFacultyType(lecturer, roleRegistry, facultyTypeRegistry);
+    const ptAllowed = canBePartTime(role);
+    return [
+      { type: "heading", label: "Employment" },
+      ...FACULTY_TYPE_OPTIONS.map((t): MenuEntry => {
+        const blocked = t === "PT" && !ptAllowed;
+        return {
+          label: FACULTY_TYPE_LABEL[t],
+          hint: blocked ? `${role} is Full-Time only` : t === "PT" ? `${roleMaxHours[PART_TIME_ROLE]}h/wk` : undefined,
+          checked: type === t,
+          disabled: blocked,
+          onSelect: () => {
+            if (type === t) return;
+            setFacultyType(lecturer, t as FacultyType);
+            toast.success(`${lecturer} is now ${FACULTY_TYPE_LABEL[t]}.`, "Employment updated", undoToast);
+          },
+        };
+      }),
+      { type: "separator" },
+      { type: "heading", label: "Staff role" },
+      ...ASSIGNABLE_ROLES.map(
+        (r): MenuEntry => ({
+          label: r,
+          hint: `${roleMaxHours[r] ?? "—"}h/wk`,
+          checked: role === r,
+          onSelect: () => {
+            if (role === r) return;
+            setRole(lecturer, r);
+            toast.success(
+              `${lecturer} is now ${r}${ROLE_DESCRIPTIONS[r] ? ` (${ROLE_DESCRIPTIONS[r]})` : ""}.`,
+              "Role updated",
+              undoToast,
+            );
+          },
+        }),
+      ),
+    ];
+  };
+}
 
 export function FacultyPage() {
   const { filtered } = useFilteredSessions();
@@ -29,17 +93,31 @@ export function FacultyPage() {
   const roleMaxHours = useStore((s) => s.roleMaxHours);
   const departmentRegistry = useStore((s) => s.departmentRegistry);
   const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
+  const [q, setQ] = useState("");
+  const menuFor = useStaffRoleMenu();
+  const menu = useContextMenu<string>();
 
   const report = useMemo(
     () => facultyReport(filtered, roleRegistry, roleMaxHours, departmentRegistry, facultyTypeRegistry),
     [filtered, roleRegistry, roleMaxHours, departmentRegistry, facultyTypeRegistry],
   );
 
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return report;
+    return report.filter((r) =>
+      [r.lecturer, r.role, r.departments, r.courses, r.status, FACULTY_TYPE_LABEL[r.facultyType]]
+        .join(" ")
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [report, q]);
+
   const columns: Column<FacultyReportRow>[] = [
     { key: "lecturer", header: "Lecturer", render: (r) => <span className="font-medium text-ink">{r.lecturer}</span> },
-    { key: "role", header: "Role", render: (r) => <Badge tone="neutral">{r.role}</Badge> },
+    { key: "role", header: "Role", render: (r) => <Badge tone="neutral" className="cursor-context-menu">{r.role}</Badge> },
     { key: "facultyType", header: "Type", render: (r) => <FacultyTypeBadge type={r.facultyType} /> },
-    { key: "departments", header: "Dept" },
+    { key: "departments", header: "Dept", render: (r) => <DepartmentList codes={r.departments} /> },
     { key: "sessions", header: "Sessions", align: "right" },
     {
       key: "hours",
@@ -76,9 +154,39 @@ export function FacultyPage() {
       <FacultyDrilldown />
 
       <Card className="p-4 overflow-hidden">
-        <SectionTitle>Faculty Report</SectionTitle>
-        <DataTable columns={columns} rows={report} rowKey={(r) => r.lecturer} empty="No lecturers." dense />
+        <div className="flex items-center gap-3 flex-wrap mb-2">
+          <SectionTitle className="mb-0 border-0 pb-0">Faculty Report</SectionTitle>
+          <span className="inline-flex items-center gap-1.5 text-[0.72rem] text-muted">
+            <MousePointerClick size={13} className="text-brass" />
+            Right-click any lecturer to assign their role or Full-Time / Part-Time status
+          </span>
+          <div className="ml-auto relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search lecturer, role, dept, course…"
+              className="w-64 max-w-full rounded border border-rule bg-surface pl-8 pr-2 py-1.5 text-sm text-content placeholder:text-muted outline-none focus:border-brass"
+            />
+          </div>
+        </div>
+        <DataTable
+          columns={columns}
+          rows={shown}
+          rowKey={(r) => r.lecturer}
+          empty={q ? `No lecturer matches “${q}”.` : "No lecturers."}
+          dense
+          onRowContextMenu={(e, r) => menu.open(e, r.lecturer)}
+          rowTitle={() => "Right-click to assign a role or employment type"}
+        />
       </Card>
+
+      <ContextMenu
+        position={menu.state?.position ?? null}
+        onClose={menu.close}
+        title={menu.state?.target}
+        entries={menu.state ? menuFor(menu.state.target) : []}
+      />
 
       <FacultyAnalytics />
     </div>
@@ -139,9 +247,12 @@ function FacultyDrilldown() {
   const termSessions = useTermSessions();
   const roleRegistry = useStore((s) => s.roleRegistry);
   const roleMaxHours = useStore((s) => s.roleMaxHours);
+  const setRole = useStore((s) => s.setRole);
   const departmentRegistry = useStore((s) => s.departmentRegistry);
   const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
   const setFacultyType = useStore((s) => s.setFacultyType);
+  const menuFor = useStaffRoleMenu();
+  const menu = useContextMenu<string>();
   const lecturers = useMemo(
     () => [...new Set(termSessions.map((s) => s.lecturer).filter((x): x is string => !!x))].sort(),
     [termSessions],
@@ -151,19 +262,20 @@ function FacultyDrilldown() {
   const mine = useMemo(() => termSessions.filter((s) => s.lecturer === chosen), [termSessions, chosen]);
 
   const role = roleRegistry[chosen] ?? DEFAULT_ROLE;
-  const maxH = maxHoursForRole(role, roleMaxHours);
-  const facultyType = facultyTypeOf(chosen, facultyTypeRegistry);
+  const facultyType = effectiveFacultyType(chosen, roleRegistry, facultyTypeRegistry);
+  const ptAllowed = canBePartTime(role);
+  const maxH = maxHoursFor(role, facultyType, roleMaxHours);
   const totalH = mine.reduce((a, s) => a + (s.workloadHours ?? 0), 0);
   const { status, reason } = workloadStatus(totalH, maxH, facultyType);
   const pct = maxH > 0 ? Math.min(100, (totalH / maxH) * 100) : 0;
   const barColor = status === "Unbalanced" ? "danger" : status === "Balanced" ? "good" : "info";
   const depts = [...new Set(mine.map((s) => departmentFor(s.programme, departmentRegistry)).filter((x): x is string => !!x))];
-  const grid = useMemo(() => buildGrid(mine, ["unitCode", "room"]), [mine]);
+  const grid = useMemo(() => buildGrid(mine, ["unitCode", "unitName", "room", "programme", "cohort"]), [mine]);
 
   if (!lecturers.length) return <EmptyState>No lecturers in this term.</EmptyState>;
 
   return (
-    <Card className="p-4 space-y-4 overflow-hidden">
+    <Card className="p-4 space-y-4 overflow-hidden" onContextMenu={(e) => chosen && menu.open(e, chosen)}>
       <div className="flex items-end gap-3 flex-wrap">
         <div className="flex-1 min-w-[220px]">
           <label className="block text-[0.68rem] uppercase tracking-wide text-muted mb-1">Inspect lecturer</label>
@@ -176,24 +288,65 @@ function FacultyDrilldown() {
           <StatusBadge status={status} />
         </div>
       </div>
-      <div className="rounded-card border border-rule bg-surface-2/20 px-3 py-2 flex items-center justify-between gap-3 flex-wrap">
-        <div className="min-w-0">
-          <div className="text-[0.68rem] uppercase tracking-wide text-muted">Faculty type</div>
-          <div className="text-sm text-content truncate">Controls workload status for {chosen}</div>
+
+      {/* Role + employment — assignable here or by right-clicking anywhere in this card */}
+      <div className="rounded-card border border-rule bg-surface-2/20 px-3 py-2.5 space-y-2.5">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <div className="text-[0.68rem] uppercase tracking-wide text-muted">Staff role</div>
+            <div className="text-sm text-content truncate">
+              {ROLE_DESCRIPTIONS[role] ?? "Drives the weekly teaching cap"} · {maxH}h/week
+            </div>
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {ASSIGNABLE_ROLES.map((r) => (
+              <Button
+                key={r}
+                size="sm"
+                variant={role === r ? "primary" : "outline"}
+                title={ROLE_DESCRIPTIONS[r]}
+                onClick={() => {
+                  setRole(chosen, r);
+                  toast.success(`${chosen} is now ${r}.`, "Role updated", undoToast);
+                }}
+                disabled={role === r}
+              >
+                {r}
+              </Button>
+            ))}
+          </div>
         </div>
-        <div className="flex gap-1.5 flex-wrap">
-          {FACULTY_TYPE_OPTIONS.map((type) => (
-            <Button
-              key={type}
-              size="sm"
-              variant={facultyType === type ? "primary" : "outline"}
-              onClick={() => setFacultyType(chosen, type)}
-              disabled={facultyType === type}
-            >
-              {FACULTY_TYPE_LABEL[type]}
-            </Button>
-          ))}
+        <div className="flex items-center justify-between gap-3 flex-wrap border-t border-rule/60 pt-2.5">
+          <div className="min-w-0">
+            <div className="text-[0.68rem] uppercase tracking-wide text-muted">Employment</div>
+            <div className="text-sm text-content truncate">
+              {ptAllowed
+                ? "Controls workload status and the daily class limit"
+                : `${role} is a full-time appointment — only Lecturers may be Part-Time`}
+            </div>
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {FACULTY_TYPE_OPTIONS.map((type) => {
+              const blocked = type === "PT" && !ptAllowed;
+              return (
+                <Button
+                  key={type}
+                  size="sm"
+                  variant={facultyType === type ? "primary" : "outline"}
+                  onClick={() => setFacultyType(chosen, type)}
+                  disabled={facultyType === type || blocked}
+                  title={blocked ? `${role} must always be Full-Time` : undefined}
+                >
+                  {FACULTY_TYPE_LABEL[type]}
+                </Button>
+              );
+            })}
+          </div>
         </div>
+        <p className="text-[0.68rem] text-muted flex items-center gap-1.5">
+          <MousePointerClick size={12} className="text-brass" />
+          Tip: right-click anywhere in this card (or on any row of the Faculty Report) for the same menu.
+        </p>
       </div>
 
       {/* Workload card — fully self-contained, never overflows */}
@@ -218,7 +371,12 @@ function FacultyDrilldown() {
           />
         </div>
         {reason && <p className="text-xs text-muted mt-1.5">{reason}</p>}
-        {depts.length > 0 && <p className="text-xs text-muted mt-0.5">Department(s): {depts.join(", ")}</p>}
+        {depts.length > 0 && (
+          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+            <span className="text-xs text-muted">Department(s):</span>
+            <DepartmentList codes={depts} />
+          </div>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-[1fr_300px] gap-4 min-w-0">
@@ -232,6 +390,13 @@ function FacultyDrilldown() {
       </div>
 
       <TransferHours lecturer={chosen} sessions={mine} />
+
+      <ContextMenu
+        position={menu.state?.position ?? null}
+        onClose={menu.close}
+        title={menu.state?.target}
+        entries={menu.state ? menuFor(menu.state.target) : []}
+      />
     </Card>
   );
 }

@@ -3,12 +3,16 @@ import { cn } from "@/lib/cn";
 export function Card({
   children,
   className,
+  onContextMenu,
 }: {
   children: React.ReactNode;
   className?: string;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   return (
-    <div className={cn("rounded-card border border-rule bg-surface", className)}>{children}</div>
+    <div className={cn("rounded-card border border-rule bg-surface", className)} onContextMenu={onContextMenu}>
+      {children}
+    </div>
   );
 }
 

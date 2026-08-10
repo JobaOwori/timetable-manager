@@ -45,9 +45,10 @@ describe("ResolutionPanel (Fix dialog)", () => {
     render(<ResolutionPanel session={s} clashType="lecturer" onDone={() => {}} />);
     expect(screen.getByRole("button", { name: /Transfer lecturer/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Reschedule$/ })).toBeInTheDocument();
-    // switch to reschedule remedy -> free slots appear (TUE/WED exist)
+    // switch to reschedule remedy -> fully validated plans appear (TUE/WED exist)
     fireEvent.click(screen.getByRole("button", { name: /^Reschedule$/ }));
-    expect(screen.getByText(/free slot/i)).toBeInTheDocument();
+    expect(screen.getByText(/checked against all lecturers, rooms, slots and rules/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^(MON|TUE|WED|THU|FRI|SAT) \d/ }).length).toBeGreaterThan(0);
   });
 
   it("moves a room on a room clash", () => {
@@ -67,23 +68,39 @@ describe("ResolutionPanel (Fix dialog)", () => {
 describe("Master Timetable", () => {
   it("renders the master grid, flags clashes, and opens a resolution modal on click", () => {
     render(<TimetablePage />);
-    // Master is the default layout; clashing chips are buttons titled 'click to resolve'
-    const clashChips = screen.getAllByTitle(/click to resolve/i);
-    expect(clashChips.length).toBeGreaterThan(0);
-    fireEvent.click(clashChips[0]);
+    // Every chip is clickable for details; clashing ones also carry a Resolve action.
+    const resolveButtons = screen.getAllByText("Resolve");
+    expect(resolveButtons.length).toBeGreaterThan(0);
+    fireEvent.click(resolveButtons[0]);
     // a modal dialog opens with resolution UI
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText(/Resolve/i)).toBeInTheDocument();
   });
 
+  it("shows the course name, programme and cohort on every entry", () => {
+    render(<TimetablePage />);
+    // Course names (not just codes) are visible at a glance.
+    expect(screen.getAllByText("Intro").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Algo").length).toBeGreaterThan(0);
+    // Clicking an entry opens its full details.
+    fireEvent.click(screen.getAllByRole("button", { name: /^U1 Intro/ })[0]);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Course unit")).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Programme/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Cohort/)).toBeInTheDocument();
+    expect(within(dialog).getByText("Room / venue")).toBeInTheDocument();
+    expect(within(dialog).getByText("BSCCS")).toBeInTheDocument();
+    expect(within(dialog).getByText("B1")).toBeInTheDocument();
+  });
+
   it("updates the flagged count after a conflict is resolved", () => {
     render(<TimetablePage />);
-    const before = screen.getAllByTitle(/click to resolve/i).length;
+    const before = screen.getAllByText("Resolve").length;
     // resolve the Dr Kay lecturer clash directly via the store
     const u2 = row("U2");
     useStore.getState().transferLecturer(u2.rowId, "Dr Zed");
     // re-render reflects fewer flagged chips (reactive)
-    const after = screen.queryAllByTitle(/click to resolve/i).length;
+    const after = screen.queryAllByText("Resolve").length;
     expect(after).toBeLessThanOrEqual(before);
   });
 });

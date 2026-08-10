@@ -5,8 +5,8 @@ import { AlertTriangle, Info } from "lucide-react";
 import { useStore } from "@/store/useStore";
 import { Session } from "@/lib/types";
 import {
-  transferCandidates, roomCandidates, rescheduleCandidates,
-  UNASSIGN, TransferCandidate, RoomCandidate, RescheduleCandidate,
+  transferCandidates, roomCandidates, reschedulePlans, rescheduleBlockers,
+  UNASSIGN, TransferCandidate, RoomCandidate, ReschedulePlan,
 } from "@/lib/transfer";
 import { explainSession } from "@/lib/resolve";
 import { toast } from "@/store/useToast";
@@ -30,9 +30,13 @@ function useResolveOpts() {
   const roleMaxHours = useStore((s) => s.roleMaxHours);
   const departmentRegistry = useStore((s) => s.departmentRegistry);
   const subjectAssignments = useStore((s) => s.subjectAssignments);
+  const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
   const thresholds = useStore((s) => s.thresholds);
   const roomRegistry = useStore((s) => s.roomRegistry);
-  return { roleRegistry, roleMaxHours, departmentRegistry, subjectAssignments, thresholds, roomRegistry };
+  return {
+    roleRegistry, roleMaxHours, departmentRegistry, subjectAssignments,
+    facultyTypeRegistry, thresholds, roomRegistry,
+  };
 }
 
 /**
@@ -127,6 +131,8 @@ export function LecturerTransferPanel({ session, onDone }: { session: Session; o
         roleMaxHours: opts.roleMaxHours,
         departmentRegistry: opts.departmentRegistry,
         subjectAssignments: opts.subjectAssignments,
+        facultyTypeRegistry: opts.facultyTypeRegistry,
+        roomRegistry: opts.roomRegistry,
         thresholds: opts.thresholds,
         includeUnavailable: showAll,
       }),
@@ -280,44 +286,120 @@ function RoomChip({ c, onPick }: { c: RoomCandidate; onPick: () => void }) {
 
 export function ReschedulePanel({ session, onDone }: { session: Session; onDone: () => void }) {
   const sessions = useStore((s) => s.sessions);
-  const reschedule = useStore((s) => s.reschedule);
-  const candidates = useMemo(() => rescheduleCandidates(session, sessions), [session, sessions]);
+  const applyPlan = useStore((s) => s.applyPlan);
+  const opts = useResolveOpts();
+  const [allowRoomChange, setAllowRoomChange] = useState(true);
+  const [allowLecturerChange, setAllowLecturerChange] = useState(true);
 
-  const pick = (c: RescheduleCandidate) => {
-    reschedule(session.rowId, c.day, c.startMin, c.endMin);
-    toast.success(`${session.unitCode ?? "Session"} rescheduled to ${c.label}.`, "Rescheduled", undoToast);
+  // Honour every configured rule (Saturday window, per-day caps, role limits,
+  // faculty types, room capacity) so only genuinely compliant plans are offered.
+  const validateOpts = useMemo(
+    () => ({
+      roleRegistry: opts.roleRegistry,
+      roleMaxHours: opts.roleMaxHours,
+      facultyTypeRegistry: opts.facultyTypeRegistry,
+      roomRegistry: opts.roomRegistry,
+      thresholds: opts.thresholds,
+    }),
+    [opts],
+  );
+
+  const plans = useMemo(
+    () => reschedulePlans(session, sessions, { ...validateOpts, allowRoomChange, allowLecturerChange }),
+    [session, sessions, validateOpts, allowRoomChange, allowLecturerChange],
+  );
+
+  const blockers = useMemo(
+    () => (plans.length === 0 ? rescheduleBlockers(session, sessions, validateOpts) : []),
+    [plans.length, session, sessions, validateOpts],
+  );
+
+  const pick = (p: ReschedulePlan) => {
+    applyPlan(session.rowId, p);
+    toast.success(
+      `${session.unitCode ?? "Session"} moved to ${p.slotLabel}${
+        p.changes.length ? ` (${p.changes.join(", ")})` : ""
+      }.`,
+      "Rescheduled",
+      undoToast,
+    );
     onDone();
   };
 
   return (
     <div className="rounded-card border border-rule bg-surface-2 p-3">
       <SectionTitle className="mb-2">
-        Reschedule <span className="font-mono">{session.unitCode}</span> to a free slot (no
-        lecturer, room or cohort clash)…
+        Reschedule <span className="font-mono">{session.unitCode}</span> — every option below is
+        checked against all lecturers, rooms, slots and rules
       </SectionTitle>
-      {candidates.length === 0 ? (
-        <p className="text-xs text-muted py-2">
-          No completely-free slot in this term. Try transferring the lecturer/room instead, or
-          relax a constraint.
-        </p>
+
+      <div className="flex flex-wrap items-center gap-3 mb-2.5 text-xs text-muted">
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={allowRoomChange}
+            onChange={(e) => setAllowRoomChange(e.target.checked)}
+            className="accent-brass"
+          />
+          Allow a different room
+        </label>
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={allowLecturerChange}
+            onChange={(e) => setAllowLecturerChange(e.target.checked)}
+            className="accent-brass"
+          />
+          Allow a different lecturer (only if nothing else fits)
+        </label>
+        <span className="ml-auto font-mono">
+          {plans.length} valid option{plans.length === 1 ? "" : "s"}
+        </span>
+      </div>
+
+      {plans.length === 0 ? (
+        <div className="rounded border border-warn/30 bg-warn/10 px-2.5 py-2 text-xs text-content space-y-1">
+          <div className="flex items-start gap-1.5">
+            <Info size={13} className="text-warn mt-0.5 shrink-0" />
+            <div>
+              <span className="font-medium">No conflict-free slot exists for this class.</span>{" "}
+              {blockers.join(" ")}
+            </div>
+          </div>
+          {(!allowRoomChange || !allowLecturerChange) && (
+            <p className="pl-5 text-muted">
+              Tick the boxes above to let the assistant also move the room or hand the class to a
+              free colleague.
+            </p>
+          )}
+        </div>
       ) : (
         <div className="flex flex-wrap gap-2">
-          {candidates.slice(0, 30).map((c) => (
+          {plans.map((p) => (
             <button
-              key={`${c.day}-${c.startMin}-${c.endMin}`}
+              key={`${p.day}-${p.startMin}-${p.endMin}-${p.room ?? ""}-${p.lecturer ?? ""}`}
               type="button"
-              onClick={() => pick(c)}
+              onClick={() => pick(p)}
+              aria-label={p.label}
+              title={`${p.label}${p.capacityWarning ? ` — ${p.capacityWarning}` : ""}`}
               className={`rounded border p-2 text-left transition bg-surface hover:border-brass hover:shadow-sm ${
-                c.recommended ? "ring-1 ring-brass border-brass" : "border-rule"
+                p.recommended ? "ring-1 ring-brass border-brass" : "border-rule"
               }`}
             >
               <div className="flex items-center gap-1">
-                <span className="font-mono text-xs font-semibold text-ink">{c.day}</span>
-                {c.recommended && <Badge tone="brass">Best</Badge>}
+                <span className="font-mono text-xs font-semibold text-ink">{p.day}</span>
+                {p.recommended && <Badge tone="brass">Best</Badge>}
+                {!p.roomChanged && !p.lecturerChanged && <Badge tone="good">same room</Badge>}
               </div>
               <div className="text-[0.7rem] text-muted mt-0.5">
-                {c.label.replace(`${c.day} `, "")}
+                {p.slotLabel.replace(`${p.day} `, "")}
               </div>
+              {p.changes.length > 0 && (
+                <div className="text-[0.66rem] text-brass mt-0.5">{p.changes.join(" · ")}</div>
+              )}
+              {p.capacityWarning && (
+                <div className="text-[0.62rem] text-warn mt-0.5">tight fit</div>
+              )}
             </button>
           ))}
         </div>

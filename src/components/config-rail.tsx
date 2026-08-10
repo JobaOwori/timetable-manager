@@ -2,11 +2,16 @@
 
 import { useRef, useState } from "react";
 import {
-  ChevronRight, FileSpreadsheet, RotateCcw, Upload, Loader2, Undo2,
+  ChevronRight, FileSpreadsheet, RotateCcw, Upload, Loader2, Undo2, Search, X,
 } from "lucide-react";
 import { useStore } from "@/store/useStore";
-import { ROLE_OPTIONS } from "@/lib/roles";
+import { ROLE_OPTIONS, ASSIGNABLE_ROLES, ROLE_DESCRIPTIONS, PART_TIME_ROLE, DEFAULT_ROLE, canBePartTime } from "@/lib/roles";
+import {
+  FACULTY_TYPE_LABEL, FACULTY_TYPE_OPTIONS, effectiveFacultyType,
+} from "@/lib/facultyType";
 import { DEPARTMENT_OPTIONS, DEPARTMENT_LABELS } from "@/lib/departments";
+import { minutesToLabel } from "@/lib/clean";
+import { chipProps } from "@/lib/colors";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/cn";
 
@@ -27,6 +32,7 @@ function Section({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
         className="flex w-full items-center justify-between gap-2 text-left"
       >
         <span className="flex items-center gap-2 font-serif uppercase tracking-wide text-[0.78rem] font-semibold text-brass">
@@ -142,9 +148,11 @@ function RailBody() {
         </div>
       </Section>
 
+      <GlobalSearch />
       <RolesSection />
       <DepartmentsSection />
       <RoomsSection />
+      <WorkloadLimitsSection />
       <ThresholdsSection />
 
       <div className="pt-3 space-y-2">
@@ -169,36 +177,138 @@ function RailBody() {
   );
 }
 
+/** One search box that narrows every view — supports `field:value` qualifiers. */
+function GlobalSearch() {
+  const search = useStore((s) => s.search);
+  const setSearch = useStore((s) => s.setSearch);
+  const clearFilters = useStore((s) => s.clearFilters);
+  const active =
+    useStore((s) => s.fPrograms.length + s.fLecturers.length + s.fRooms.length + s.fDays.length + s.fDepartments.length) +
+    (search.trim() ? 1 : 0);
+
+  return (
+    <div className="border-b border-rule py-2.5 space-y-1.5">
+      <div className="relative">
+        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search everything…"
+          aria-label="Search sessions"
+          className="w-full rounded border border-rule bg-surface pl-8 pr-7 py-1.5 text-sm text-content placeholder:text-muted outline-none focus:border-brass"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            aria-label="Clear search"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-ink"
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
+      <p className="text-[0.66rem] text-muted leading-snug">
+        Unit, lecturer, room, programme, cohort, day, time or note. Use{" "}
+        <span className="font-mono text-brass">room:109</span>,{" "}
+        <span className="font-mono text-brass">lecturer:tax</span>,{" "}
+        <span className="font-mono text-brass">&quot;research methods&quot;</span> or{" "}
+        <span className="font-mono text-brass">-online</span> to exclude.
+      </p>
+      {active > 0 && (
+        <button
+          type="button"
+          onClick={clearFilters}
+          className="w-full flex items-center justify-center gap-1.5 rounded border border-rule px-2 py-1 text-[0.7rem] text-muted hover:text-ink transition"
+        >
+          <X size={11} /> Clear {active} active filter{active === 1 ? "" : "s"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Assign each lecturer's staff role AND their Full-Time / Part-Time status —
+ * both drive the weekly-hours cap and the daily class limit. (The Faculty page
+ * offers the same via right-click.)
+ */
 function RolesSection() {
   const roleRegistry = useStore((s) => s.roleRegistry);
+  const facultyTypeRegistry = useStore((s) => s.facultyTypeRegistry);
   const setRole = useStore((s) => s.setRole);
+  const setFacultyType = useStore((s) => s.setFacultyType);
   const [q, setQ] = useState("");
+  const [onlyPT, setOnlyPT] = useState(false);
   const lecturers = Object.keys(roleRegistry).sort();
-  const shown = q ? lecturers.filter((l) => l.toLowerCase().includes(q.toLowerCase())) : lecturers;
+  const shown = lecturers
+    .filter((l) => (q ? l.toLowerCase().includes(q.toLowerCase()) : true))
+    .filter((l) => (onlyPT ? effectiveFacultyType(l, roleRegistry, facultyTypeRegistry) === "PT" : true));
   return (
     <Section title="Faculty Roles">
-      <p className="text-[0.72rem] text-muted">Role drives each lecturer&apos;s weekly-hours cap.</p>
+      <p className="text-[0.72rem] text-muted leading-snug">
+        Role sets the weekly-hours cap. <span className="text-ink">Only a Lecturer may be
+        Part-Time</span> — DAA, AR, H.O.D., Dean, Lab Assistant and Teaching Assistant are always
+        Full-Time. Part-time staff get a higher daily class limit because they are paid per session.
+      </p>
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Search lecturer…"
         className="w-full rounded border border-rule bg-surface px-2 py-1 text-sm text-content placeholder:text-muted outline-none focus:border-brass"
       />
-      <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
-        {shown.map((l) => (
-          <div key={l} className="flex items-center gap-1.5">
-            <span className="flex-1 truncate text-[0.78rem] text-content" title={l}>{l}</span>
-            <select
-              value={roleRegistry[l]}
-              onChange={(e) => setRole(l, e.target.value)}
-              className="rounded border border-rule bg-surface px-1 py-0.5 text-[0.72rem] text-content"
-            >
-              {ROLE_OPTIONS.map((r) => (
-                <option key={r} value={r}>{r}</option>
-              ))}
-            </select>
-          </div>
-        ))}
+      <label className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer">
+        <input type="checkbox" checked={onlyPT} onChange={(e) => setOnlyPT(e.target.checked)} className="accent-brass" />
+        Show part-time only
+      </label>
+      <div className="max-h-72 overflow-y-auto space-y-1.5 pr-1">
+        {shown.length === 0 && <div className="text-xs text-muted">No lecturer matches.</div>}
+        {shown.map((l) => {
+          const role = roleRegistry[l] ?? DEFAULT_ROLE;
+          const type = effectiveFacultyType(l, roleRegistry, facultyTypeRegistry);
+          const ptAllowed = canBePartTime(role);
+          return (
+            <div key={l} className="space-y-0.5">
+              <div className="flex items-center gap-1.5">
+                <span className="flex-1 truncate text-[0.78rem] text-content" title={l}>{l}</span>
+                <select
+                  value={role}
+                  onChange={(e) => setRole(l, e.target.value)}
+                  title={ROLE_DESCRIPTIONS[role] ?? "Staff role"}
+                  className="rounded border border-rule bg-surface px-1 py-0.5 text-[0.72rem] text-content"
+                >
+                  {ASSIGNABLE_ROLES.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex gap-1 pl-0.5">
+                {FACULTY_TYPE_OPTIONS.map((t) => {
+                  const blocked = t === "PT" && !ptAllowed;
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      disabled={blocked}
+                      title={blocked ? `${role} must always be Full-Time` : undefined}
+                      onClick={() => setFacultyType(l, t)}
+                      className={cn(
+                        "rounded-full border px-1.5 py-[1px] text-[0.62rem] transition",
+                        type === t
+                          ? "bg-brass border-brass text-white"
+                          : blocked
+                            ? "border-rule/60 text-muted/40 cursor-not-allowed"
+                            : "border-rule text-muted hover:text-ink",
+                      )}
+                    >
+                      {FACULTY_TYPE_LABEL[t]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </Section>
   );
@@ -207,15 +317,44 @@ function RolesSection() {
 function DepartmentsSection() {
   const departmentRegistry = useStore((s) => s.departmentRegistry);
   const setDepartment = useStore((s) => s.setDepartment);
-  const programmes = Object.keys(departmentRegistry).sort();
+  const [q, setQ] = useState("");
+  const programmes = Object.keys(departmentRegistry)
+    .sort()
+    .filter((p) => (q ? p.toLowerCase().includes(q.toLowerCase()) : true));
   return (
     <Section title="Department Map">
-      <p className="text-[0.72rem] text-muted leading-snug">
-        {DEPARTMENT_OPTIONS.map((c) => `${c} = ${DEPARTMENT_LABELS[c]}`).join(" · ")}
-      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {DEPARTMENT_OPTIONS.map((c) => {
+          const { style, className } = chipProps(c);
+          return (
+            <span
+              key={c}
+              style={style}
+              title={DEPARTMENT_LABELS[c]}
+              className={cn(
+                "inline-flex items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-medium",
+                className,
+              )}
+            >
+              {c}
+            </span>
+          );
+        })}
+      </div>
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Search programme…"
+        className="w-full rounded border border-rule bg-surface px-2 py-1 text-sm text-content placeholder:text-muted outline-none focus:border-brass"
+      />
       <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
+        {programmes.length === 0 && <div className="text-xs text-muted">No programme matches.</div>}
         {programmes.map((p) => (
           <div key={p} className="flex items-center gap-1.5">
+            <span
+              style={chipProps(departmentRegistry[p]).style}
+              className={cn("h-2 w-2 rounded-full shrink-0", departmentRegistry[p] ? "dot-color" : "bg-rule")}
+            />
             <span className="flex-1 truncate text-[0.78rem] text-content">{p}</span>
             <select
               value={departmentRegistry[p]}
@@ -237,10 +376,22 @@ function DepartmentsSection() {
 function RoomsSection() {
   const roomRegistry = useStore((s) => s.roomRegistry);
   const setRoomRegistry = useStore((s) => s.setRoomRegistry);
-  const rooms = Object.keys(roomRegistry).sort();
+  const [q, setQ] = useState("");
+  const rooms = Object.keys(roomRegistry)
+    .sort()
+    .filter((r) => (q ? r.toLowerCase().includes(q.toLowerCase()) : true));
+  const total = Object.keys(roomRegistry).length;
   return (
     <Section title="Room Capacities">
       <p className="text-[0.72rem] text-muted">Verified capacities override the sheet value.</p>
+      {total > 0 && (
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search room…"
+          className="w-full rounded border border-rule bg-surface px-2 py-1 text-sm text-content placeholder:text-muted outline-none focus:border-brass"
+        />
+      )}
       <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
         {rooms.map((r) => (
           <div key={r} className="flex items-center gap-2">
@@ -255,8 +406,66 @@ function RoomsSection() {
             />
           </div>
         ))}
-        {rooms.length === 0 && <div className="text-xs text-muted">No room sheet detected.</div>}
+        {total === 0 && <div className="text-xs text-muted">No room sheet detected.</div>}
+        {total > 0 && rooms.length === 0 && <div className="text-xs text-muted">No room matches.</div>}
       </div>
+    </Section>
+  );
+}
+
+/**
+ * Weekly teaching-hour caps per staff role — Lecturer, H.O.D., Dean, DAA, AR,
+ * Lab Assistant and Part-Time Lecturer. Every limit is adjustable and persists
+ * across reloads.
+ */
+function WorkloadLimitsSection() {
+  const roleMaxHours = useStore((s) => s.roleMaxHours);
+  const setRoleMaxHoursFor = useStore((s) => s.setRoleMaxHoursFor);
+  const resetRoleMaxHours = useStore((s) => s.resetRoleMaxHours);
+  return (
+    <Section title="Workload Limits by Role">
+      <p className="text-[0.72rem] text-muted leading-snug">
+        Maximum teaching hours per week. Part-time staff are capped by the{" "}
+        <span className="text-ink">Part-Time Lecturer</span> limit regardless of their role.
+      </p>
+      <div className="space-y-2">
+        {ROLE_OPTIONS.map((role) => (
+          <div key={role}>
+            <div className="flex justify-between items-center gap-2 text-[0.72rem] text-content">
+              <span className="truncate" title={ROLE_DESCRIPTIONS[role] ?? role}>{role}</span>
+              <div className="flex items-center gap-1 shrink-0">
+                <input
+                  type="number"
+                  min={0}
+                  max={40}
+                  step={1}
+                  value={roleMaxHours[role] ?? 0}
+                  onChange={(e) => setRoleMaxHoursFor(role, Number(e.target.value))}
+                  className="w-12 rounded border border-rule bg-surface px-1 py-0.5 text-[0.72rem] text-right text-content"
+                />
+                <span className="font-mono text-muted text-[0.66rem]">h/wk</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={40}
+              step={1}
+              value={roleMaxHours[role] ?? 0}
+              onChange={(e) => setRoleMaxHoursFor(role, Number(e.target.value))}
+              aria-label={`${role} weekly hours limit`}
+              className="w-full accent-brass"
+            />
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={resetRoleMaxHours}
+        className="w-full flex items-center justify-center gap-1.5 rounded border border-rule px-2 py-1 text-[0.7rem] text-muted hover:text-ink transition"
+      >
+        <RotateCcw size={11} /> Restore default limits
+      </button>
     </Section>
   );
 }
@@ -264,15 +473,33 @@ function RoomsSection() {
 function ThresholdsSection() {
   const th = useStore((s) => s.thresholds);
   const setThreshold = useStore((s) => s.setThreshold);
-  const Row = ({ label, k, min, max, step = 1 }: { label: string; k: keyof typeof th; min: number; max: number; step?: number }) => (
+  const resetThresholds = useStore((s) => s.resetThresholds);
+  const Row = ({
+    label,
+    k,
+    min,
+    max,
+    step = 1,
+    format,
+    hint,
+  }: {
+    label: string;
+    k: keyof typeof th;
+    min: number;
+    max: number;
+    step?: number;
+    format?: (v: number) => string;
+    hint?: string;
+  }) => (
     <div>
       <div className="flex justify-between text-[0.72rem] text-content">
-        <span>{label}</span>
-        <span className="font-mono text-muted">{th[k]}</span>
+        <span title={hint}>{label}</span>
+        <span className="font-mono text-muted">{format ? format(th[k]) : th[k]}</span>
       </div>
       <input
         type="range" min={min} max={max} step={step} value={th[k]}
         onChange={(e) => setThreshold(k, Number(e.target.value))}
+        aria-label={label}
         className="w-full accent-brass"
       />
     </div>
@@ -284,6 +511,59 @@ function ThresholdsSection() {
       <Row label="Underutilized %" k="underutilPct" min={0} max={1} step={0.05} />
       <Row label="Capacity tolerance" k="capacityTolerance" min={0} max={100} step={1} />
       <Row label="Max consecutive hrs" k="maxConsecutiveHours" min={2} max={12} step={0.5} />
+      <Row label="Max gap between classes (min)" k="maxGapMinutes" min={0} max={120} step={5} />
+
+      <div className="pt-1 border-t border-rule/60">
+        <div className="text-[0.66rem] uppercase tracking-wide text-brass mb-1.5">Daily class limits</div>
+        <Row
+          label="Max classes/day — Full-Time"
+          k="maxSessionsPerDay"
+          min={1}
+          max={8}
+          step={1}
+          hint="Per lecturer, per day. A combined class counts once."
+        />
+        <Row
+          label="Max classes/day — Part-Time"
+          k="maxSessionsPerDayPartTime"
+          min={1}
+          max={8}
+          step={1}
+          hint="Part-time staff are paid per session, so they may teach more per day."
+        />
+      </div>
+
+      <div className="pt-1 border-t border-rule/60">
+        <div className="text-[0.66rem] uppercase tracking-wide text-brass mb-1.5">Saturday teaching window</div>
+        <Row
+          label="Starts"
+          k="saturdayStartMin"
+          min={6 * 60}
+          max={12 * 60}
+          step={30}
+          format={minutesToLabel}
+        />
+        <Row
+          label="Ends"
+          k="saturdayEndMin"
+          min={12 * 60}
+          max={20 * 60}
+          step={30}
+          format={minutesToLabel}
+        />
+        <p className="text-[0.66rem] text-muted leading-snug mt-0.5">
+          Saturday classes must finish by {minutesToLabel(th.saturdayEndMin)}. Sessions outside the
+          window are listed under Policy rule violations on Resolve.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={resetThresholds}
+        className="w-full flex items-center justify-center gap-1.5 rounded border border-rule px-2 py-1 text-[0.7rem] text-muted hover:text-ink transition"
+      >
+        <RotateCcw size={11} /> Restore default thresholds
+      </button>
     </Section>
   );
 }

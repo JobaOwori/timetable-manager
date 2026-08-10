@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Fraunces, Public_Sans, JetBrains_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 
@@ -39,6 +40,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     >
       <body>
         <ThemeProvider>{children}</ThemeProvider>
+        {/* Vercel Web Analytics — page views only; the uploaded timetable never
+            leaves the browser, so no schedule data is ever sent. */}
+        <Analytics />
       </body>
     </html>
   );

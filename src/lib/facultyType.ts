@@ -2,6 +2,7 @@
 // and the institution's scheduling-rule constants. Central home for the rules
 // introduced on top of clash detection.
 import { FacultyType, Session, WorkloadStatus } from "./types";
+import { canBePartTime } from "./roles";
 
 export const DEFAULT_FACULTY_TYPE: FacultyType = "FT";
 
@@ -27,6 +28,23 @@ export function facultyTypeOf(
 ): FacultyType {
   if (!lecturer) return DEFAULT_FACULTY_TYPE;
   return registry?.[lecturer] ?? DEFAULT_FACULTY_TYPE;
+}
+
+/**
+ * The faculty type that actually applies, honouring the rule that only a
+ * Lecturer may be Part-Time. Anyone holding a substantive role (DAA, AR,
+ * H.O.D., Dean, Lab Assistant, Teaching Assistant) is Full-Time whatever the
+ * registry says, so imported or stale data can never bypass the policy.
+ */
+export function effectiveFacultyType(
+  lecturer: string | null,
+  roleRegistry?: Record<string, string>,
+  typeRegistry?: Record<string, FacultyType>,
+): FacultyType {
+  const type = facultyTypeOf(lecturer, typeRegistry);
+  if (type !== "PT") return type;
+  const role = lecturer ? roleRegistry?.[lecturer] : undefined;
+  return canBePartTime(role) ? "PT" : "FT";
 }
 
 /**
@@ -111,6 +129,22 @@ export function forbiddenOnSaturday(programme: string | null): boolean {
 
 /** Full-time lecturers may not be scheduled in the Friday 4:00–6:00 PM slot. */
 export const FRIDAY_BLOCK = { day: "FRI" as const, startMin: 16 * 60, endMin: 18 * 60 };
+
+/**
+ * Saturday teaching runs 9:00 AM – 4:00 PM. Saturday classes must finish by
+ * 4:00 PM (they used to be allowed to run to 6:00 PM).
+ */
+export const SATURDAY_WINDOW = { startMin: 9 * 60, endMin: 16 * 60 };
+
+/** True when [startMin, endMin) fits inside the Saturday teaching window. */
+export function withinSaturdayWindow(
+  startMin: number | null,
+  endMin: number | null,
+  window: { startMin: number; endMin: number } = SATURDAY_WINDOW,
+): boolean {
+  if (startMin === null || endMin === null) return true; // nothing to judge
+  return startMin >= window.startMin && endMin <= window.endMin;
+}
 
 function fmt(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);

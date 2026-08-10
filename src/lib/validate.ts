@@ -10,8 +10,15 @@ import {
   Session,
   Thresholds,
 } from "./types";
-import { DEFAULT_ROLE, maxHoursForRole } from "./roles";
-import { facultyTypeOf, FRIDAY_BLOCK, forbiddenOnSaturday, requiresSaturday } from "./facultyType";
+import { DEFAULT_ROLE, maxHoursFor } from "./roles";
+import {
+  effectiveFacultyType,
+  FRIDAY_BLOCK,
+  SATURDAY_WINDOW,
+  forbiddenOnSaturday,
+  requiresSaturday,
+  withinSaturdayWindow,
+} from "./facultyType";
 import { isCombinedPlacement, sharedClassKey } from "./sharedClass";
 import { minutesToLabel } from "./clean";
 
@@ -24,7 +31,8 @@ export type ViolationKind =
   | "capacity"
   | "max_per_day"
   | "faculty_rule"
-  | "programme_rule";
+  | "programme_rule"
+  | "time_window";
 
 export type Severity = "error" | "warning";
 
@@ -45,6 +53,7 @@ export interface Placement {
   lecturer: string | null;
   batchCode: string | null;
   programme: string | null;
+  unitCode: string | null;
   unitName: string | null;
   term: string | null;
   headCount: number | null;
@@ -58,8 +67,22 @@ export interface ValidateOptions {
   roomRegistry?: Record<string, number>;
   thresholds?: Pick<
     Thresholds,
-    "capacityTolerance" | "maxConsecutiveHours" | "maxGapMinutes" | "maxSessionsPerDay"
+    | "capacityTolerance"
+    | "maxConsecutiveHours"
+    | "maxGapMinutes"
+    | "maxSessionsPerDay"
+    | "maxSessionsPerDayPartTime"
+    | "saturdayStartMin"
+    | "saturdayEndMin"
   >;
+}
+
+/** The configured Saturday teaching window, falling back to the 9 AM–4 PM default. */
+function saturdayWindow(opts: ValidateOptions): { startMin: number; endMin: number } {
+  return {
+    startMin: opts.thresholds?.saturdayStartMin ?? SATURDAY_WINDOW.startMin,
+    endMin: opts.thresholds?.saturdayEndMin ?? SATURDAY_WINDOW.endMin,
+  };
 }
 
 const overlap = (
@@ -80,6 +103,7 @@ export function placementOf(s: Session): Placement {
     lecturer: s.lecturer,
     batchCode: s.batchCode,
     programme: s.programme,
+    unitCode: s.unitCode,
     unitName: s.unitName,
     term: s.term,
     headCount: s.headCount,
@@ -149,7 +173,8 @@ export function validatePlacement(
   // Weekly workload cap for the (proposed) lecturer within the term.
   if (p.lecturer !== null && opts.roleMaxHours) {
     const role = opts.roleRegistry?.[p.lecturer] ?? DEFAULT_ROLE;
-    const maxHours = maxHoursForRole(role, opts.roleMaxHours);
+    const ft = effectiveFacultyType(p.lecturer, opts.roleRegistry, opts.facultyTypeRegistry);
+    const maxHours = maxHoursFor(role, ft, opts.roleMaxHours);
     const existing = term
       .filter((s) => s.lecturer === p.lecturer)
       .reduce((a, s) => a + (s.workloadHours ?? 0), 0);
@@ -158,7 +183,9 @@ export function validatePlacement(
       out.push({
         kind: "workload",
         severity: "error",
-        message: `${p.lecturer} would reach ${round(projected)}h, over the ${maxHours}h weekly limit for ${role}.`,
+        message: `${p.lecturer} would reach ${round(projected)}h, over the ${maxHours}h weekly limit for ${
+          ft === "PT" ? "Part-Time staff" : role
+        }.`,
       });
   }
 
@@ -181,8 +208,13 @@ export function validatePlacement(
   }
 
   // Max sessions per lecturer per day (a combined/shared class counts once).
+  // Part-time staff are paid per session, so they get a higher daily allowance.
   if (p.lecturer !== null) {
-    const maxPerDay = opts.thresholds?.maxSessionsPerDay ?? 3;
+    const ft = effectiveFacultyType(p.lecturer, opts.roleRegistry, opts.facultyTypeRegistry);
+    const maxPerDay =
+      ft === "PT"
+        ? opts.thresholds?.maxSessionsPerDayPartTime ?? 4
+        : opts.thresholds?.maxSessionsPerDay ?? 3;
     const others = sameDay.filter((s) => s.lecturer === p.lecturer);
     const distinctKeys = new Set(others.map((s) => sharedClassKey(s) ?? `row-${s.rowId}`));
     // the moving session joins an existing combined class only if it matches one
@@ -192,7 +224,9 @@ export function validatePlacement(
       out.push({
         kind: "max_per_day",
         severity: "error",
-        message: `${p.lecturer} would have ${dayCount} sessions on ${p.day} (max ${maxPerDay} per day).`,
+        message: `${p.lecturer} would have ${dayCount} sessions on ${p.day} (max ${maxPerDay} per day for ${
+          ft === "PT" ? "Part-Time" : "Full-Time"
+        } staff).`,
       });
   }
 
@@ -200,7 +234,7 @@ export function validatePlacement(
   if (
     p.lecturer !== null &&
     p.day === FRIDAY_BLOCK.day &&
-    facultyTypeOf(p.lecturer, opts.facultyTypeRegistry) === "FT" &&
+    effectiveFacultyType(p.lecturer, opts.roleRegistry, opts.facultyTypeRegistry) === "FT" &&
     overlap(p.startMin, p.endMin, FRIDAY_BLOCK.startMin, FRIDAY_BLOCK.endMin)
   ) {
     out.push({
@@ -225,6 +259,20 @@ export function validatePlacement(
       severity: "error",
       message: `${p.programme ?? "This programme"} (Master's/Doctoral) must be scheduled on Saturday.`,
     });
+  }
+
+  // Saturday teaching runs 9:00 AM – 4:00 PM; classes must finish by 4:00 PM.
+  if (p.day === "SAT") {
+    const win = saturdayWindow(opts);
+    if (!withinSaturdayWindow(p.startMin, p.endMin, win)) {
+      out.push({
+        kind: "time_window",
+        severity: "error",
+        message: `Saturday classes run ${minutesToLabel(win.startMin)}–${minutesToLabel(
+          win.endMin,
+        )}; ${minutesToLabel(p.startMin)}–${minutesToLabel(p.endMin)} falls outside that window.`,
+      });
+    }
   }
 
   // Room capacity (warning within tolerance, error beyond).
@@ -293,7 +341,7 @@ function round(n: number, dp = 1): number {
 export const hasError = (v: Violation[]): boolean => v.some((x) => x.severity === "error");
 
 /** Rule kinds beyond simple double-booking (the institution's policies). */
-const RULE_KINDS: ViolationKind[] = ["max_per_day", "faculty_rule", "programme_rule"];
+const RULE_KINDS: ViolationKind[] = ["max_per_day", "faculty_rule", "programme_rule", "time_window"];
 
 export interface RuleViolation {
   rowId: number;

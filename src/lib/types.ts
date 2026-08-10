@@ -6,6 +6,15 @@ export const DAY_ORDER: DayCode[] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "
 
 export type TimeError = "missing" | "unparseable" | "end_before_start" | null;
 
+/** Record of the duplicate rows a session absorbed via "merge similar courses". */
+export interface MergeInfo {
+  rowIds: number[];
+  unitCodes: string[];
+  unitNames: string[];
+  programmes: string[];
+  batchCodes: string[];
+}
+
 /** One scheduled teaching session, fully normalized. */
 export interface Session {
   rowId: number;
@@ -31,6 +40,8 @@ export interface Session {
   lecturerRaw: string | null;
   headCount: number | null;
   notes: string | null;
+  /** Present when duplicate rows were merged into this one. */
+  merged?: MergeInfo;
 }
 
 export type CanonicalField =
@@ -67,7 +78,12 @@ export interface Thresholds {
   capacityTolerance: number; // students over capacity allowed
   maxConsecutiveHours: number;
   maxGapMinutes: number;
-  maxSessionsPerDay: number; // per-lecturer daily session cap
+  maxSessionsPerDay: number; // per-lecturer daily session cap (full-time)
+  /** Part-time staff are paid per session, so they may teach more per day. */
+  maxSessionsPerDayPartTime: number;
+  /** Saturday teaching window (minutes from midnight) — 9:00 AM to 4:00 PM. */
+  saturdayStartMin: number;
+  saturdayEndMin: number;
 }
 
 export const DEFAULT_THRESHOLDS: Thresholds = {
@@ -78,6 +94,9 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
   maxConsecutiveHours: 6,
   maxGapMinutes: 15,
   maxSessionsPerDay: 3,
+  maxSessionsPerDayPartTime: 4,
+  saturdayStartMin: 9 * 60,
+  saturdayEndMin: 16 * 60,
 };
 
 export type ClashType = "room" | "lecturer" | "batch_code";
