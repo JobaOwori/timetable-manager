@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildSessions, autoMapColumns } from "@/lib/ingest";
 import { reschedulePlans, rescheduleBlockers, applyReschedulePlan } from "@/lib/transfer";
 import { allClashes, detectClashes, lecturerWorkload } from "@/lib/analysis";
-import { validatePlacement, placementOf } from "@/lib/validate";
+import { validatePlacement, placementOf, detectRuleViolations } from "@/lib/validate";
 import { DEFAULT_THRESHOLDS, Session } from "@/lib/types";
 import { ROLE_MAX_HOURS, PART_TIME_ROLE, canBePartTime, ASSIGNABLE_ROLES, FULL_TIME_ONLY_ROLES } from "@/lib/roles";
 import { effectiveFacultyType } from "@/lib/facultyType";
@@ -357,5 +357,61 @@ describe("timetable grid entries", () => {
     const e = grid.cells[grid.slots[0]][grid.days[0]].entries[0];
     expect(e.secondary).toContain("BBAIB");
     expect(e.secondary).toContain("BBAIM");
+  });
+});
+
+describe("policy violations are explained in plain English", () => {
+  it("names the level and the actual day, with no UG/PG jargon", () => {
+    // A Master's programme scheduled on a weekday.
+    const pg = makeSessions([
+      base({ Programm: "MSCIT", WDAY: "MON", UNITCODE: "MB1", UNITNAME: "IT Audit" }),
+    ]);
+    const pgMsg = detectRuleViolations(pg, opts).find((v) => v.kind === "programme_rule")!.message;
+    expect(pgMsg).toContain("Master's");
+    expect(pgMsg).toContain("Saturday only");
+    expect(pgMsg).toContain("Monday");
+    expect(pgMsg).not.toMatch(/UG|PG|≠/);
+
+    // A Bachelor's programme scheduled on Saturday.
+    const ug = makeSessions([
+      base({ Programm: "BSCCS", WDAY: "SAT", Time: "9:00AM - 10:55AM", UNITCODE: "B1" }),
+    ]);
+    const ugMsg = detectRuleViolations(ug, opts).find((v) => v.kind === "programme_rule")!.message;
+    expect(ugMsg).toContain("Bachelor's");
+    expect(ugMsg).toContain("Saturday");
+    expect(ugMsg).not.toMatch(/UG|PG|≠/);
+  });
+
+  it("carries the full class context so the UI needs no extra lookup", () => {
+    const s = makeSessions([
+      base({
+        Programm: "MSCIT", WDAY: "MON", UNITCODE: "MB1", UNITNAME: "IT Audit",
+        Faculty: "Dr Q", ROOMCODE: "308", BATCHCODE: "M1", "Head Count": 20,
+      }),
+    ]);
+    const v = detectRuleViolations(s, opts).find((x) => x.kind === "programme_rule")!;
+    expect(v.unitCode).toBe("MB1");
+    expect(v.unitName).toBe("IT Audit");
+    expect(v.lecturer).toBe("Dr Q");
+    expect(v.room).toBe("308");
+    expect(v.day).toBe("MON");
+    expect(v.time).toBeTruthy();
+    expect(v.headCount).toBe(20);
+    expect(v.programmes).toEqual(["MSCIT"]);
+    expect(v.cohorts).toEqual(["M1"]);
+  });
+
+  it("lists every programme and cohort of a merged class", () => {
+    const merged = applyMerge(
+      makeSessions([
+        base({ Programm: "MBA", BATCHCODE: "M1", UNITCODE: "TX1", UNITNAME: "Taxation", Faculty: "Dr P", ROOMCODE: "406", WDAY: "MON" }),
+        base({ Programm: "MSC.DFT", BATCHCODE: "M2", UNITCODE: "TX2", UNITNAME: "Introduction to Taxation", Faculty: "Dr P", ROOMCODE: "406", WDAY: "MON" }),
+      ]),
+      [1, 2],
+    );
+    const v = detectRuleViolations(merged, opts).find((x) => x.kind === "programme_rule");
+    expect(v).toBeTruthy();
+    expect(v!.programmes).toEqual(["MBA", "MSC.DFT"]);
+    expect(v!.cohorts).toEqual(["M1", "M2"]);
   });
 });

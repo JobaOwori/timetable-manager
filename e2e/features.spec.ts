@@ -179,7 +179,7 @@ test("18 · reschedule proposes only valid conflict-free options", async ({ page
   await goTo(page, "Resolve");
 
   // Open the first conflict's Fix panel and switch to Reschedule.
-  const fix = page.getByRole("button", { name: /^Fix$/ }).first();
+  const fix = page.getByRole("button", { name: /^Fix / }).first();
   await fix.scrollIntoViewIfNeeded();
   await fix.click();
   await page.waitForTimeout(800);
@@ -224,7 +224,7 @@ test("19 · rescheduling reduces the conflict count and never increases it", asy
 
   const before = (await chipCount("All")) || (await chipCount("Lecturer")) + (await chipCount("Room"));
 
-  const fix = page.getByRole("button", { name: /^Fix$/ }).first();
+  const fix = page.getByRole("button", { name: /^Fix / }).first();
   await fix.scrollIntoViewIfNeeded();
   await fix.click();
   await page.waitForTimeout(800);

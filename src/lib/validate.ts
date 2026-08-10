@@ -3,6 +3,7 @@
 // candidate generators (to rank/filter) and by the UI (to explain, in plain
 // language, exactly why a proposed fix is or isn't allowed).
 import {
+  DAY_NAME,
   DayCode,
   FacultyTypeRegistry,
   RoleMaxHours,
@@ -14,8 +15,10 @@ import { DEFAULT_ROLE, maxHoursFor } from "./roles";
 import {
   effectiveFacultyType,
   FRIDAY_BLOCK,
+  PROG_LEVEL_SHORT,
   SATURDAY_WINDOW,
   forbiddenOnSaturday,
+  programmeLevel,
   requiresSaturday,
   withinSaturdayWindow,
 } from "./facultyType";
@@ -244,20 +247,20 @@ export function validatePlacement(
     });
   }
 
-  // Programme-level day rules (by code prefix): Bachelor's/Diploma/HEC never on
-  // Saturday; Master's/Doctoral only on Saturday.
+  // Programme-level day rules (by code prefix): Bachelor's/Diploma/HEC are
+  // weekday programmes; Master's/Doctoral teach on Saturday only.
   if (p.day === "SAT" && forbiddenOnSaturday(p.programme)) {
     out.push({
       kind: "programme_rule",
       severity: "error",
-      message: `${p.programme ?? "This programme"} (weekday programme) can't be scheduled on Saturday.`,
+      message: `${p.programme ?? "This programme"} is a ${PROG_LEVEL_SHORT[programmeLevel(p.programme)]} programme, which teaches Monday–Friday, but this class is on Saturday.`,
     });
   }
   if (p.day !== "SAT" && requiresSaturday(p.programme)) {
     out.push({
       kind: "programme_rule",
       severity: "error",
-      message: `${p.programme ?? "This programme"} (Master's/Doctoral) must be scheduled on Saturday.`,
+      message: `${p.programme ?? "This programme"} is a ${PROG_LEVEL_SHORT[programmeLevel(p.programme)]} programme, which teaches on Saturday only, but this class is on ${DAY_NAME[p.day] ?? p.day}.`,
     });
   }
 
@@ -346,22 +349,34 @@ const RULE_KINDS: ViolationKind[] = ["max_per_day", "faculty_rule", "programme_r
 export interface RuleViolation {
   rowId: number;
   unitCode: string | null;
+  unitName: string | null;
   programme: string | null;
+  /** Every programme attending, including any merged into this row. */
+  programmes: string[];
+  /** Every cohort attending, including any merged into this row. */
+  cohorts: string[];
   lecturer: string | null;
+  room: string | null;
   day: DayCode | null;
   time: string | null;
+  headCount: number | null;
   kind: ViolationKind;
   message: string;
 }
 
 /**
  * Scan the current timetable for sessions that break a scheduling POLICY (max
- * sessions/day, full-time Friday-evening block, or the UG/PG Saturday rules) —
- * as opposed to plain double-bookings. Used to surface & fix policy breaches.
+ * sessions/day, full-time Friday-evening block, the Saturday teaching window,
+ * or the programme's teaching-day rule) — as opposed to plain double-bookings.
+ * Each entry carries the full class context so the UI can explain, without any
+ * further lookup, exactly which lecture is affected and how to handle it.
  */
 export function detectRuleViolations(sessions: Session[], opts: ValidateOptions = {}): RuleViolation[] {
   const out: RuleViolation[] = [];
   const seenMaxPerDay = new Set<string>();
+  const uniq = (xs: (string | null | undefined)[]) =>
+    [...new Set(xs.filter((x): x is string => !!x))].sort();
+
   for (const s of sessions) {
     if (s.day === null || s.startMin === null || s.endMin === null) continue;
     const viols = validatePlacement(s.rowId, placementOf(s), sessions, opts).filter((v) =>
@@ -377,10 +392,15 @@ export function detectRuleViolations(sessions: Session[], opts: ValidateOptions 
       out.push({
         rowId: s.rowId,
         unitCode: s.unitCode,
+        unitName: s.unitName,
         programme: s.programme,
+        programmes: uniq([s.programme, ...(s.merged?.programmes ?? [])]),
+        cohorts: uniq([s.batchCode, ...(s.merged?.batchCodes ?? [])]),
         lecturer: s.lecturer,
+        room: s.room,
         day: s.day,
         time: s.timeRaw,
+        headCount: s.headCount,
         kind: v.kind,
         message: v.message,
       });

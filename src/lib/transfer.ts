@@ -665,10 +665,10 @@ export function rescheduleBlockers(
     cohort: `cohort ${session.batchCode ?? "?"} is already in class`,
     workload: "the weekly workload limit would be exceeded",
     consecutive: "the consecutive-teaching-hours limit would be exceeded",
-    max_per_day: "the per-day class limit would be exceeded",
-    faculty_rule: "the full-time Friday 4–6 PM block applies",
-    programme_rule: "the programme's day rule (UG≠Sat, PG=Sat) applies",
-    time_window: "the slot falls outside the Saturday teaching window",
+    max_per_day: "the lecturer's daily class limit would be exceeded",
+    faculty_rule: "full-time staff can't teach in the Friday 4–6 PM slot",
+    programme_rule: "the programme doesn't teach on that day",
+    time_window: "the slot is outside Saturday teaching hours (9:00 AM – 4:00 PM)",
     capacity: "no room with enough capacity is free",
   };
 

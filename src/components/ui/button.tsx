@@ -11,6 +11,7 @@ export function Button({
   className,
   type = "button",
   title,
+  ariaLabel,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
@@ -20,6 +21,7 @@ export function Button({
   className?: string;
   type?: "button" | "submit";
   title?: string;
+  ariaLabel?: string;
 }) {
   const variants = {
     outline: "border border-ink/60 text-ink hover:bg-ink hover:text-parchment",
@@ -31,6 +33,7 @@ export function Button({
     <button
       type={type}
       title={title}
+      aria-label={ariaLabel}
       onClick={onClick}
       disabled={disabled}
       className={cn(

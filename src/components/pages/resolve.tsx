@@ -3,14 +3,16 @@
 import { useMemo, useState } from "react";
 import {
   ArrowRightLeft, CheckCircle2, DoorOpen, User, Users, Clock, Wand2, Info, Loader2, ShieldAlert,
-  Merge, Link2,
+  Merge, Link2, GraduationCap,
 } from "lucide-react";
 import { useFilteredSessions, useAnalysis, useMergeableGroups } from "@/store/selectors";
 import { useStore } from "@/store/useStore";
 import { Card, EmptyState, SectionTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Clash, Session } from "@/lib/types";
+import { Clash, DAY_NAME, Session } from "@/lib/types";
+import { chipProps } from "@/lib/colors";
+import { cn } from "@/lib/cn";
 import { ResolutionPanel } from "@/components/resolution-panel";
 import { FacultyTypeBadge } from "@/components/ui/faculty-badge";
 import { ResolveResult } from "@/lib/resolve";
@@ -584,18 +586,49 @@ function SessionRow({
   );
 }
 
-const RULE_META: Record<string, { label: string; tone: "danger" | "warn" | "info" }> = {
-  max_per_day: { label: "Too many sessions in a day", tone: "warn" },
-  faculty_rule: { label: "Full-Time Friday 4–6 PM block", tone: "danger" },
-  programme_rule: { label: "Programme day rule (UG≠Sat, PG=Sat)", tone: "info" },
-  time_window: { label: "Outside the Saturday 9 AM–4 PM window", tone: "danger" },
+/**
+ * Plain-English description of each policy rule: what it is called, why it
+ * exists, and what a scheduler should do about it. No jargon or abbreviations —
+ * this panel is read by registry staff, not just the person who wrote the rules.
+ */
+const RULE_META: Record<
+  string,
+  { label: string; tone: "danger" | "warn" | "info"; why: string; fix: string }
+> = {
+  max_per_day: {
+    label: "Too many classes in one day",
+    tone: "warn",
+    why: "A lecturer may only teach a limited number of classes per day (3 for full-time staff, 4 for part-time, who are paid per session).",
+    fix: "Move one of the day's classes to another day, or hand it to a colleague.",
+  },
+  faculty_rule: {
+    label: "Full-time staff can't teach Friday 4–6 PM",
+    tone: "danger",
+    why: "The Friday 4:00–6:00 PM slot is reserved; full-time staff are not scheduled then.",
+    fix: "Move the class to another slot, or reassign it to a part-time lecturer.",
+  },
+  programme_rule: {
+    label: "Wrong teaching day for this programme",
+    tone: "info",
+    why: "Master's and Doctoral programmes teach on Saturdays only; Bachelor's, Diploma and Higher Education Certificate programmes teach Monday to Friday.",
+    fix: "Move the class to a day the programme actually teaches on.",
+  },
+  time_window: {
+    label: "Outside Saturday teaching hours",
+    tone: "danger",
+    why: "Saturday classes run from 9:00 AM to 4:00 PM and must finish by 4:00 PM.",
+    fix: "Move the class to a Saturday slot that ends by 4:00 PM.",
+  },
 };
 
 /**
- * Lists sessions that break an institutional POLICY (not a double-booking):
- * per-day session cap, the full-time Friday-evening block, the UG/PG Saturday
- * rules, and the Saturday 9 AM–4 PM teaching window — each fixable in place
- * (rescheduling only offers compliant slots).
+ * Sessions that break an institutional POLICY (not a double-booking): the
+ * per-day class cap, the full-time Friday-evening block, the programme's
+ * teaching-day rule, and the Saturday teaching window.
+ *
+ * Each entry shows the whole lecture — course, lecturer, programmes, cohorts,
+ * room and current slot — plus what the rule is and how to satisfy it, so the
+ * scheduler can decide how to handle it without opening anything else.
  */
 function PolicyViolations({
   sessions,
@@ -607,42 +640,164 @@ function PolicyViolations({
   const liveSessions = useStore((s) => s.sessions);
   const violations = useMemo(() => detectRuleViolations(sessions, opts), [sessions, opts]);
   const [openRow, setOpenRow] = useState<number | null>(null);
+  const [kindFilter, setKindFilter] = useState<string | null>(null);
+
+  const byKind = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const v of violations) m.set(v.kind, (m.get(v.kind) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [violations]);
 
   if (violations.length === 0) return null;
+  const shown = kindFilter ? violations.filter((v) => v.kind === kindFilter) : violations;
   const active = openRow !== null ? liveSessions.find((s) => s.rowId === openRow) ?? null : null;
 
   return (
     <Card className="overflow-hidden border-warn/40">
-      <div className="flex items-center gap-2 px-4 py-2.5 bg-warn/10 border-b border-warn/30">
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-warn/10 border-b border-warn/30 flex-wrap">
         <ShieldAlert size={15} className="text-warn" />
-        <span className="font-medium text-ink text-sm">Policy rule violations</span>
+        <span className="font-medium text-ink text-sm">Scheduling policy breaches</span>
         <Badge tone="warn">{violations.length}</Badge>
-        <span className="ml-auto text-xs text-muted">Beyond double-bookings — schedule policy breaches</span>
+        <span className="ml-auto text-xs text-muted">
+          These aren&apos;t double-bookings — each class breaks an institutional rule
+        </span>
       </div>
-      <div className="divide-y divide-rule/60 max-h-72 overflow-auto">
-        {violations.map((v) => (
-          <div key={`${v.rowId}-${v.kind}`}>
-            <div className="flex items-center gap-3 px-4 py-2.5 text-sm">
-              <Badge tone={RULE_META[v.kind].tone}>{RULE_META[v.kind].label}</Badge>
-              <div className="flex-1 min-w-0">
-                <span className="font-mono text-xs text-ink">{v.unitCode ?? `#${v.rowId}`}</span>{" "}
-                <span className="text-xs text-content">{v.message}</span>
+
+      {/* Group counts double as filters, so a whole category can be worked through. */}
+      {byKind.length > 1 && (
+        <div className="flex gap-1.5 flex-wrap px-4 py-2 border-b border-rule/60 bg-surface-2/20">
+          <button
+            type="button"
+            onClick={() => setKindFilter(null)}
+            className={`rounded-full px-2.5 py-0.5 text-xs border transition ${
+              kindFilter === null ? "bg-brass border-brass text-white" : "border-rule text-muted hover:text-ink"
+            }`}
+          >
+            All <span className="font-mono">{violations.length}</span>
+          </button>
+          {byKind.map(([kind, n]) => (
+            <button
+              key={kind}
+              type="button"
+              onClick={() => setKindFilter(kind === kindFilter ? null : kind)}
+              className={`rounded-full px-2.5 py-0.5 text-xs border transition ${
+                kindFilter === kind ? "bg-brass border-brass text-white" : "border-rule text-muted hover:text-ink"
+              }`}
+            >
+              {RULE_META[kind]?.label ?? kind} <span className="font-mono">{n}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="divide-y divide-rule/60 max-h-[36rem] overflow-auto">
+        {shown.map((v) => {
+          const meta = RULE_META[v.kind];
+          const open = openRow === v.rowId;
+          return (
+            <div key={`${v.rowId}-${v.kind}`}>
+              <div className="px-4 py-3 space-y-1.5">
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 min-w-0 space-y-1">
+                    {/* What the rule is */}
+                    <Badge tone={meta.tone}>{meta.label}</Badge>
+
+                    {/* Which lecture — course code and full name */}
+                    <div className="text-sm text-ink">
+                      <span className="font-mono font-semibold">{v.unitCode ?? `#${v.rowId}`}</span>{" "}
+                      <span className="text-content">{v.unitName ?? "Untitled unit"}</span>
+                    </div>
+
+                    {/* Who and where — everything needed to judge the fix */}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+                      <span className="inline-flex items-center gap-1">
+                        <GraduationCap size={11} className="text-brass" />
+                        {v.lecturer ?? "Unassigned (TBA)"}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <Clock size={11} className="text-brass" />
+                        {v.day ? DAY_NAME[v.day] : "—"} · {v.time ?? "—"}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <DoorOpen size={11} className="text-brass" />
+                        Room {v.room ?? "—"}
+                      </span>
+                      {v.headCount !== null && (
+                        <span className="inline-flex items-center gap-1">
+                          <Users size={11} className="text-brass" />
+                          {v.headCount} students
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Which programmes and cohorts are affected */}
+                    {(v.programmes.length > 0 || v.cohorts.length > 0) && (
+                      <div className="flex flex-wrap items-center gap-1">
+                        {v.programmes.map((p) => {
+                          const { style, className } = chipProps(p);
+                          return (
+                            <span
+                              key={p}
+                              style={style}
+                              className={cn(
+                                "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.68rem] font-medium",
+                                className,
+                              )}
+                            >
+                              {p}
+                            </span>
+                          );
+                        })}
+                        {v.cohorts.map((c) => (
+                          <span
+                            key={c}
+                            className="inline-flex items-center rounded-full border border-rule px-1.5 py-0.5 text-[0.66rem] font-mono text-muted"
+                          >
+                            {c}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <Button
+                    size="sm"
+                    variant={open ? "primary" : "outline"}
+                    ariaLabel={`${open ? "Close" : "Fix"} ${v.unitCode ?? `#${v.rowId}`}: ${meta.label}`}
+                    onClick={() => setOpenRow(open ? null : v.rowId)}
+                  >
+                    <ArrowRightLeft size={13} /> {open ? "Close" : "Fix"}
+                  </Button>
+                </div>
+
+                {/* Why it's flagged, and what to do about it */}
+                <div className="rounded border border-rule/70 bg-surface-2/30 px-2.5 py-2 text-xs space-y-1">
+                  <div className="flex items-start gap-1.5">
+                    <Info size={12} className="text-brass mt-0.5 shrink-0" />
+                    <span className="text-content">
+                      <span className="font-medium text-ink">Problem: </span>
+                      {v.message}
+                    </span>
+                  </div>
+                  <div className="pl-[18px] text-muted">
+                    <span className="font-medium">The rule: </span>
+                    {meta.why}
+                  </div>
+                  <div className="pl-[18px] text-muted">
+                    <span className="font-medium">How to handle it: </span>
+                    {meta.fix}
+                  </div>
+                </div>
               </div>
-              <Button
-                size="sm"
-                variant={openRow === v.rowId ? "primary" : "outline"}
-                onClick={() => setOpenRow(openRow === v.rowId ? null : v.rowId)}
-              >
-                <ArrowRightLeft size={13} /> {openRow === v.rowId ? "Close" : "Fix"}
-              </Button>
+
+              {open && active && (
+                <div className="px-4 pb-4 animate-fade">
+                  <ResolutionPanel session={active} onDone={() => setOpenRow(null)} />
+                </div>
+              )}
             </div>
-            {openRow === v.rowId && active && (
-              <div className="px-4 pb-4 animate-fade">
-                <ResolutionPanel session={active} onDone={() => setOpenRow(null)} />
-              </div>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </Card>
   );

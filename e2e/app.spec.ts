@@ -278,10 +278,10 @@ test("09 · Saturday runs 9:00 AM – 4:00 PM and overruns are flagged", async (
   await goTo(page, "Resolve");
 
   // Saturday sessions that overrun 4 PM appear as policy violations.
-  const policy = page.getByText("Policy rule violations", { exact: true });
+  const policy = page.getByText("Scheduling policy breaches", { exact: true });
   await expect(policy).toBeVisible();
   await policy.scrollIntoViewIfNeeded();
-  const satBadge = page.getByText("Outside the Saturday 9 AM–4 PM window").first();
+  const satBadge = page.getByText("Outside Saturday teaching hours").first();
   await expect(satBadge).toBeVisible();
   await shot(page, "09b-saturday-violations");
 
@@ -289,7 +289,10 @@ test("09 · Saturday runs 9:00 AM – 4:00 PM and overruns are flagged", async (
   await expect(page.getByText(/Saturday classes run 9:00 AM–4:00 PM/).first()).toBeVisible();
 
   // Fixing one only offers Saturday slots that finish by 4 PM.
-  const fix = satBadge.locator("xpath=ancestor::div[1]").getByRole("button", { name: /Fix/ });
+  const fix = page
+    .getByRole("button", { name: /^Fix .*Outside Saturday teaching hours$/ })
+    .first();
+  await fix.scrollIntoViewIfNeeded();
   await fix.click();
   await page.waitForTimeout(800);
   await page.getByRole("button", { name: "Reschedule", exact: true }).first().click();

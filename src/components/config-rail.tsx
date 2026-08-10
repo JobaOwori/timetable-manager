@@ -553,7 +553,7 @@ function ThresholdsSection() {
         />
         <p className="text-[0.66rem] text-muted leading-snug mt-0.5">
           Saturday classes must finish by {minutesToLabel(th.saturdayEndMin)}. Sessions outside the
-          window are listed under Policy rule violations on Resolve.
+          window are listed under Scheduling policy breaches on Resolve.
         </p>
       </div>
 

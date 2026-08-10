@@ -4,6 +4,17 @@ export type DayCode = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";
 
 export const DAY_ORDER: DayCode[] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 
+/** Full day names, for messages that should read like plain English. */
+export const DAY_NAME: Record<DayCode, string> = {
+  MON: "Monday",
+  TUE: "Tuesday",
+  WED: "Wednesday",
+  THU: "Thursday",
+  FRI: "Friday",
+  SAT: "Saturday",
+  SUN: "Sunday",
+};
+
 export type TimeError = "missing" | "unparseable" | "end_before_start" | null;
 
 /** Record of the duplicate rows a session absorbed via "merge similar courses". */
