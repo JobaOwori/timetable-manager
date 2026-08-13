@@ -90,6 +90,61 @@ export function allClashes(sessions: Session[]): Clash[] {
   ];
 }
 
+/**
+ * How many clashes (of the requested types) one session takes part in.
+ *
+ * Moving or reassigning a single session can only create or clear clashes that
+ * involve THAT session — every other pair in the timetable is untouched. So the
+ * total clash count after a change is:
+ *
+ *     newTotal = oldTotal - clashesForSession(before) + clashesForSession(after)
+ *
+ * which means a remedy improves the timetable exactly when this count drops.
+ * Checking that is a single O(n) scan instead of re-deriving all n² pairs, and
+ * it is what makes auto-resolve fast enough to run interactively.
+ */
+export function clashesForSession(
+  sessions: Session[],
+  target: Session,
+  types: ClashType[] = ["room", "lecturer", "batch_code"],
+  lecturerFilter?: string,
+): number {
+  if (target.term === null || target.day === null) return 0;
+  if (target.startMin === null || target.endMin === null) return 0;
+
+  const valueOf = (s: Session, t: ClashType): string | null =>
+    t === "room" ? s.room : t === "lecturer" ? s.lecturer : s.batchCode;
+
+  let count = 0;
+  for (const other of sessions) {
+    if (other.rowId === target.rowId) continue;
+    if (other.term !== target.term || other.day !== target.day) continue;
+    if (other.startMin === null || other.endMin === null) continue;
+    // Same overlap test detectClashes uses.
+    if (!(target.startMin < other.endMin && other.startMin < target.endMin)) continue;
+    // Two rows of one combined class are never a double-booking.
+    if (sameSharedClass(target, other)) continue;
+
+    for (const type of types) {
+      if (type === "room" && (target.isVirtualRoom || other.isVirtualRoom)) continue;
+      const a = valueOf(target, type);
+      if (a === null || a !== valueOf(other, type)) continue;
+      if (
+        lecturerFilter !== undefined &&
+        !(
+          (type === "lecturer" && a === lecturerFilter) ||
+          target.lecturer === lecturerFilter ||
+          other.lecturer === lecturerFilter
+        )
+      ) {
+        continue;
+      }
+      count += 1;
+    }
+  }
+  return count;
+}
+
 export function clashingRowIds(clashes: Clash[]): Set<number> {
   const s = new Set<number>();
   for (const c of clashes) {

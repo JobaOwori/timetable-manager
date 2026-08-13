@@ -3,7 +3,8 @@
 // available lecturer, and — crucially — explain in plain language when a
 // conflict cannot be cleared automatically.
 import { Clash, ClashType, Session } from "./types";
-import { detectClashes } from "./analysis";
+import { clashesForSession, detectClashes } from "./analysis";
+import { finalizeSession } from "./ingest";
 import {
   CandidateOptions,
   applyReschedule,
@@ -45,10 +46,26 @@ function pickMover(a: Session, b: Session): Session {
   return a.rowId > b.rowId ? a : b;
 }
 
+/** Live progress for the UI while a resolve run is in flight. */
+export interface ResolveProgress {
+  /** Conflicts outstanding when the run started. */
+  total: number;
+  /** Conflicts cleared so far. */
+  cleared: number;
+  /** Conflicts still outstanding. */
+  remaining: number;
+  /** Changes applied so far. */
+  steps: number;
+  /** The unit currently being worked on, for a live label. */
+  currentUnit: string | null;
+}
+
 interface RunOptions {
   lecturer?: string; // limit to conflicts involving this lecturer
   types?: ("lecturer" | "room" | "batch_code")[];
   maxIterations?: number;
+  /** Called after each applied change so the UI can show progress. */
+  onProgress?: (p: ResolveProgress) => void;
 }
 
 const DEFAULT_TYPES: ClashType[] = ["lecturer", "room", "batch_code"];
@@ -115,23 +132,51 @@ function unitLabel(session: Session): string {
   return session.unitCode ?? "this class";
 }
 
+/**
+ * Try the available remedies for one conflicting session, cheapest first, and
+ * return the first that genuinely reduces the clash count.
+ *
+ * Candidates are evaluated with an O(n) delta check on the moved session rather
+ * than by rebuilding the whole timetable and rescanning every pair, and the
+ * session array is only copied once — for the remedy that actually wins.
+ */
 function tryMonotonicRemedies(
   working: Session[],
   session: Session,
   activeTypes: Set<ClashType>,
   opts: AutoResolveOptions,
-  beforeCount: number,
   types: ClashType[],
   lecturer?: string,
-): { sessions: Session[]; step: ResolutionStep } | null {
-  const improves = (next: Session[]) => relevantClashCount(next, types, lecturer) < beforeCount;
+): { sessions: Session[]; step: ResolutionStep; cleared: number } | null {
+  /** Clashes this session is in right now — the bar every candidate must beat. */
+  const before = clashesForSession(working, session, types, lecturer);
+  if (before === 0) return null;
+
+  /** Accept the first candidate that puts the session in strictly fewer clashes. */
+  const scoreOf = (candidate: Session) =>
+    clashesForSession(working, candidate, types, lecturer);
 
   if (activeTypes.size > 0) {
-    for (const candidate of rescheduleCandidates(session, working, opts).filter((c) => c.free)) {
-      const next = applyReschedule(working, session.rowId, candidate.day, candidate.startMin, candidate.endMin);
-      if (improves(next)) {
+    for (const candidate of rescheduleCandidates(session, working, opts)) {
+      if (!candidate.free) continue;
+      const moved = finalizeSession({
+        ...session,
+        day: candidate.day,
+        dayRaw: candidate.day,
+        startMin: candidate.startMin,
+        endMin: candidate.endMin,
+      });
+      const after = scoreOf(moved);
+      if (after < before) {
         return {
-          sessions: next,
+          cleared: before - after,
+          sessions: applyReschedule(
+            working,
+            session.rowId,
+            candidate.day,
+            candidate.startMin,
+            candidate.endMin,
+          ),
           step: {
             rowId: session.rowId,
             unitCode: session.unitCode,
@@ -151,10 +196,16 @@ function tryMonotonicRemedies(
       ...candidates.filter((c) => c.available && c.wouldOverload),
     ];
     for (const candidate of ordered) {
-      const next = applyTransfer(working, session.rowId, candidate.lecturer);
-      if (improves(next)) {
+      const moved = finalizeSession({
+        ...session,
+        lecturer: candidate.lecturer,
+        lecturerRaw: candidate.lecturer,
+      });
+      const after = scoreOf(moved);
+      if (after < before) {
         return {
-          sessions: next,
+          cleared: before - after,
+          sessions: applyTransfer(working, session.rowId, candidate.lecturer),
           step: {
             rowId: session.rowId,
             unitCode: session.unitCode,
@@ -169,12 +220,14 @@ function tryMonotonicRemedies(
 
   if (activeTypes.has("room") && session.room !== null && !session.isVirtualRoom && opts.roomRegistry) {
     const candidates = roomCandidates(session, working, opts.roomRegistry ?? {}, opts.capacityTolerance ?? 0);
-    const ordered = candidates.filter((c) => c.available && c.fits);
-    for (const candidate of ordered) {
-      const next = applyRoomChange(working, session.rowId, candidate.room);
-      if (improves(next)) {
+    for (const candidate of candidates) {
+      if (!candidate.available || !candidate.fits) continue;
+      const moved = finalizeSession({ ...session, room: candidate.room });
+      const after = scoreOf(moved);
+      if (after < before) {
         return {
-          sessions: next,
+          cleared: before - after,
+          sessions: applyRoomChange(working, session.rowId, candidate.room),
           step: {
             rowId: session.rowId,
             unitCode: session.unitCode,
@@ -245,37 +298,67 @@ function unresolvedReasons(
 /**
  * Greedily resolve conflicts. Returns the new sessions, the ordered list of
  * changes made, and, for anything it could not fix, the exact reasons.
+ *
+ * Each pass rescans the timetable once to find the outstanding conflicts, then
+ * applies the first change that provably reduces the count. Candidate testing
+ * itself is O(n) per candidate (see `clashesForSession`), so the expensive full
+ * rescan happens once per applied change rather than once per candidate tried.
  */
-export function autoResolve(
+export function* autoResolveSteps(
   sessions: Session[],
   opts: AutoResolveOptions,
   run: RunOptions = {},
-): ResolveResult {
+): Generator<ResolveProgress, ResolveResult, void> {
   const types = requestedTypes(run);
   let working = sessions.map((s) => ({ ...s }));
   const steps: ResolutionStep[] = [];
   const maxIter = run.maxIterations ?? 1000;
 
-  for (let i = 0; i < maxIter; i++) {
-    const clashes = relevantClashes(working, types, run.lecturer);
-    if (clashes.length === 0) break;
-    const beforeCount = clashes.length;
-    const rowTypes = clashTypesByRow(clashes);
-    let progressed = false;
+  const initial = relevantClashes(working, types, run.lecturer).length;
+  let outstanding = initial;
+  const snapshot = (remaining: number, currentUnit: string | null): ResolveProgress => ({
+    total: initial,
+    cleared: Math.max(0, initial - remaining),
+    remaining,
+    steps: steps.length,
+    currentUnit,
+  });
+  yield snapshot(initial, null);
 
-    for (const session of orderedConflictingSessions(working, clashes)) {
-      const activeTypes = rowTypes.get(session.rowId);
+  for (let pass = 0; pass < maxIter; pass++) {
+    const clashes = relevantClashes(working, types, run.lecturer);
+    outstanding = clashes.length;
+    if (clashes.length === 0) break;
+    const rowTypes = clashTypesByRow(clashes);
+    // Work through every conflicting session ONCE per pass, applying each fix as
+    // we find it. Re-deriving the queue after every single change would make the
+    // sessions that have no remedy get retried on every iteration — which is
+    // what used to dominate the runtime.
+    const queue = orderedConflictingSessions(working, clashes).map((s) => s.rowId);
+    let appliedThisPass = 0;
+
+    for (const rowId of queue) {
+      const activeTypes = rowTypes.get(rowId);
       if (!activeTypes) continue;
-      const result = tryMonotonicRemedies(working, session, activeTypes, opts, beforeCount, types, run.lecturer);
-      if (result) {
-        working = result.sessions;
-        steps.push(result.step);
-        progressed = true;
-        break;
-      }
+      // Earlier changes in this pass may have moved or already cleared it.
+      const session = working.find((s) => s.rowId === rowId);
+      if (!session) continue;
+      if (clashesForSession(working, session, types, run.lecturer) === 0) continue;
+
+      const result = tryMonotonicRemedies(working, session, activeTypes, opts, types, run.lecturer);
+      if (!result) continue;
+
+      working = result.sessions;
+      steps.push(result.step);
+      appliedThisPass += 1;
+      // The remedy is guaranteed to have cleared `cleared` clashes, so progress
+      // needs no rescan of the whole timetable.
+      outstanding = Math.max(0, outstanding - result.cleared);
+      yield snapshot(outstanding, session.unitCode);
     }
 
-    if (!progressed) break;
+    // A pass that changes nothing will never change anything on the next one.
+    if (appliedThisPass === 0) break;
   }
 
   // Build unresolved report for any remaining conflicting sessions.
@@ -294,6 +377,24 @@ export function autoResolve(
   }
 
   return { sessions: working, steps, unresolved: [...unresolvedMap.values()] };
+}
+
+/**
+ * Run the whole thing to completion in one go. Callers that want to keep the UI
+ * responsive should drive `autoResolveSteps` instead and yield between slices.
+ */
+export function autoResolve(
+  sessions: Session[],
+  opts: AutoResolveOptions,
+  run: RunOptions = {},
+): ResolveResult {
+  const iterator = autoResolveSteps(sessions, opts, run);
+  let step = iterator.next();
+  while (!step.done) {
+    run.onProgress?.(step.value);
+    step = iterator.next();
+  }
+  return step.value;
 }
 
 /** Explain, for a single session in conflict, what can/can't be done and why. */

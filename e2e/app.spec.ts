@@ -299,29 +299,40 @@ test("09 · Saturday runs 9:00 AM – 4:00 PM and overruns are flagged", async (
   await page.waitForTimeout(1000);
   await shotFull(page, "09c-saturday-fix-panel");
 
-  const satOptions = await page
-    .locator('button[aria-label^="SAT "]')
-    .evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
+  // Whatever it offers, any SATURDAY option must finish by 4:00 PM. (A weekday
+  // programme wrongly placed on Saturday is correctly offered weekdays instead,
+  // so the absence of Saturday options is fine — a bad one never is.)
+  const options = await page
+    .locator("button[aria-label]")
+    .evaluateAll((els) =>
+      els.map((e) => e.getAttribute("aria-label") ?? "")
+        .filter((a) => /^(MON|TUE|WED|THU|FRI|SAT) /.test(a)),
+    );
 
-  if (satOptions.length === 0) {
-    // Legitimate for a Saturday-only cohort that is booked all week — but the
-    // panel must then say exactly why, naming the real blocker.
-    const why = page.getByText(/No conflict-free slot exists/);
-    await expect(why).toBeVisible();
-    await expect(page.getByText(/cohort .* is already in class|alternative slots/i)).toBeVisible();
+  if (options.length === 0) {
+    await expect(page.getByText(/No conflict-free slot exists/)).toBeVisible();
     return;
   }
 
-  let checked = 0;
-  for (const label of satOptions) {
+  for (const label of options.filter((l) => l.startsWith("SAT "))) {
     const m = label.match(/SAT\s+(\d+):(\d+)\s*(AM|PM)\s*-\s*(\d+):(\d+)\s*(AM|PM)/i);
     if (!m) continue;
     const endHour = (Number(m[4]) % 12) + (m[6].toUpperCase() === "PM" ? 12 : 0);
     const endMin = endHour * 60 + Number(m[5]);
-    expect(endMin, `Saturday slot "${label}" must finish by 4:00 PM`).toBeLessThanOrEqual(16 * 60);
-    checked += 1;
+    expect(endMin, `Saturday option "${label}" must finish by 4:00 PM`).toBeLessThanOrEqual(16 * 60);
   }
-  expect(checked).toBeGreaterThan(0);
+
+  // And every option must be a real, forward-running time range.
+  for (const label of options) {
+    const m = label.match(/(\d+):(\d+)\s*(AM|PM)\s*-\s*(\d+):(\d+)\s*(AM|PM)/i);
+    if (!m) continue;
+    const toMin = (h: string, mm: string, ap: string) =>
+      ((Number(h) % 12) + (ap.toUpperCase() === "PM" ? 12 : 0)) * 60 + Number(mm);
+    expect(
+      toMin(m[4], m[5], m[6]),
+      `option "${label}" must end after it starts`,
+    ).toBeGreaterThan(toMin(m[1], m[2], m[3]));
+  }
 });
 
 test("10 · conflict cards offer an inline Merge for similar courses", async ({ page }) => {

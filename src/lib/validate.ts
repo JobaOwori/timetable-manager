@@ -95,6 +95,54 @@ const overlap = (
   bEnd: number | null,
 ): boolean => bStart !== null && bEnd !== null && aStart < bEnd && bStart < aEnd;
 
+/**
+ * Cached views of a session array, so validating a placement doesn't re-filter
+ * the whole timetable every time.
+ *
+ * Candidate generation calls `validatePlacement` once per (day, slot, room,
+ * lecturer) combination — hundreds of times per session — and each call used to
+ * walk all n sessions twice just to find the ones sharing a term and day. The
+ * arrays here are treated as immutable everywhere in the engine (every edit
+ * produces a new array), so a WeakMap keyed on the array is always valid and
+ * invalidates itself the moment the timetable changes.
+ */
+interface SessionIndex {
+  byRowId: Map<number, Session>;
+  /** `${term}||${day}` -> sessions on that day. */
+  byTermDay: Map<string, Session[]>;
+  /** `${term}||${lecturer}` -> total workload hours. */
+  hoursByTermLecturer: Map<string, number>;
+}
+
+const INDEX_CACHE = new WeakMap<Session[], SessionIndex>();
+
+function sessionIndex(sessions: Session[]): SessionIndex {
+  const cached = INDEX_CACHE.get(sessions);
+  if (cached) return cached;
+
+  const byRowId = new Map<number, Session>();
+  const byTermDay = new Map<string, Session[]>();
+  const hoursByTermLecturer = new Map<string, number>();
+
+  for (const s of sessions) {
+    byRowId.set(s.rowId, s);
+    if (s.day !== null) {
+      const key = `${s.term}||${s.day}`;
+      const arr = byTermDay.get(key);
+      if (arr) arr.push(s);
+      else byTermDay.set(key, [s]);
+    }
+    if (s.lecturer !== null) {
+      const key = `${s.term}||${s.lecturer}`;
+      hoursByTermLecturer.set(key, (hoursByTermLecturer.get(key) ?? 0) + (s.workloadHours ?? 0));
+    }
+  }
+
+  const index: SessionIndex = { byRowId, byTermDay, hoursByTermLecturer };
+  INDEX_CACHE.set(sessions, index);
+  return index;
+}
+
 /** Turn a Session into a Placement (its current position). */
 export function placementOf(s: Session): Placement {
   return {
@@ -130,8 +178,22 @@ export function validatePlacement(
     out.push({ kind: "consecutive", severity: "error", message: "The session has no valid day/time to place." });
     return out;
   }
-  const term = sessions.filter((s) => s.term === p.term && s.rowId !== movingRowId);
-  const sameDay = term.filter((s) => s.day === p.day);
+  // A backwards range overlaps nothing, so every other check would pass and the
+  // placement would look perfectly free. Reject it outright.
+  if (p.endMin <= p.startMin) {
+    out.push({
+      kind: "time_window",
+      severity: "error",
+      message: `The time range ${minutesToLabel(p.startMin)}–${minutesToLabel(
+        p.endMin,
+      )} ends before it starts, so the class can't be placed there.`,
+    });
+    return out;
+  }
+  const index = sessionIndex(sessions);
+  const sameDay = (index.byTermDay.get(`${p.term}||${p.day}`) ?? []).filter(
+    (s) => s.rowId !== movingRowId,
+  );
   const at = (s: Session) => overlap(p.startMin!, p.endMin!, s.startMin, s.endMin);
 
   // Room double-booking (physical rooms only). A row of the SAME combined class
@@ -178,9 +240,13 @@ export function validatePlacement(
     const role = opts.roleRegistry?.[p.lecturer] ?? DEFAULT_ROLE;
     const ft = effectiveFacultyType(p.lecturer, opts.roleRegistry, opts.facultyTypeRegistry);
     const maxHours = maxHoursFor(role, ft, opts.roleMaxHours);
-    const existing = term
-      .filter((s) => s.lecturer === p.lecturer)
-      .reduce((a, s) => a + (s.workloadHours ?? 0), 0);
+    // Everything that lecturer teaches this term, minus the session being moved.
+    const moving = index.byRowId.get(movingRowId);
+    const own =
+      moving && moving.term === p.term && moving.lecturer === p.lecturer
+        ? moving.workloadHours ?? 0
+        : 0;
+    const existing = (index.hoursByTermLecturer.get(`${p.term}||${p.lecturer}`) ?? 0) - own;
     const projected = existing + (p.workloadHours ?? 0);
     if (projected > maxHours)
       out.push({

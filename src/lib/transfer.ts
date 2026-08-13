@@ -271,13 +271,11 @@ export function rescheduleCandidates(
   opts: ValidateOptions & { includeBlocked?: boolean } = {},
 ): RescheduleCandidate[] {
   const termRows = sessions.filter((s) => s.term === session.term);
-  // distinct slots (start,end) present in the term
-  const slotMap = new Map<string, { startMin: number; endMin: number }>();
-  for (const s of termRows) {
-    if (s.startMin === null || s.endMin === null) continue;
-    slotMap.set(`${s.startMin}-${s.endMin}`, { startMin: s.startMin, endMin: s.endMin });
-  }
-  const slots = [...slotMap.values()].sort((a, b) => a.startMin - b.startMin);
+  // The institution's real periods. Rows whose time failed to parse (e.g. a
+  // "4:05PM - 6:00AM" typo) must never become a candidate slot: an inverted
+  // range overlaps nothing, so it would look conflict-free everywhere and be
+  // picked in preference to a real one.
+  const slots = termSlots(termRows);
   const days = DAY_ORDER.filter((d) => termRows.some((s) => s.day === d));
   const satSlots = saturdaySlots(slots, session, opts);
 

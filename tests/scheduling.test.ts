@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { buildSessions, autoMapColumns } from "@/lib/ingest";
-import { reschedulePlans, rescheduleBlockers, applyReschedulePlan } from "@/lib/transfer";
-import { allClashes, detectClashes, lecturerWorkload } from "@/lib/analysis";
+import {
+  reschedulePlans, rescheduleBlockers, applyReschedulePlan, applyReschedule, rescheduleCandidates,
+} from "@/lib/transfer";
+import { autoResolve } from "@/lib/resolve";
+import { allClashes, clashesForSession, detectClashes, lecturerWorkload } from "@/lib/analysis";
 import { validatePlacement, placementOf, detectRuleViolations } from "@/lib/validate";
 import { DEFAULT_THRESHOLDS, Session } from "@/lib/types";
 import { ROLE_MAX_HOURS, PART_TIME_ROLE, canBePartTime, ASSIGNABLE_ROLES, FULL_TIME_ONLY_ROLES } from "@/lib/roles";
@@ -413,5 +416,120 @@ describe("policy violations are explained in plain English", () => {
     expect(v).toBeTruthy();
     expect(v!.programmes).toEqual(["MBA", "MSC.DFT"]);
     expect(v!.cohorts).toEqual(["M1", "M2"]);
+  });
+});
+
+describe("incremental clash counting (the auto-resolve fast path)", () => {
+  const week = () =>
+    makeSessions([
+      base({ UNITCODE: "U1", ROOMCODE: "101", Faculty: "Dr A", BATCHCODE: "B1", WDAY: "MON" }),
+      base({ UNITCODE: "U2", ROOMCODE: "101", Faculty: "Dr B", BATCHCODE: "B2", WDAY: "MON" }),
+      base({ UNITCODE: "U3", ROOMCODE: "102", Faculty: "Dr A", BATCHCODE: "B3", WDAY: "MON" }),
+      base({ UNITCODE: "U4", ROOMCODE: "103", Faculty: "Dr C", BATCHCODE: "B1", WDAY: "MON" }),
+      base({ UNITCODE: "U5", ROOMCODE: "104", Faculty: "Dr D", BATCHCODE: "B9", WDAY: "TUE" }),
+    ]);
+
+  /** The whole optimisation rests on this identity holding for every row. */
+  it("agrees with a full rescan: total = sum of per-session counts / 2", () => {
+    const s = week();
+    const perSession = s.reduce((a, x) => a + clashesForSession(s, x), 0);
+    // Every clash is counted once from each side.
+    expect(perSession).toBe(allClashes(s).length * 2);
+  });
+
+  it("predicts the new total after a move without rescanning", () => {
+    const s = week();
+    const target = s.find((x) => x.unitCode === "U2")!;
+    const before = allClashes(s).length;
+    const beforeRow = clashesForSession(s, target);
+
+    // Move U2 to a free day.
+    const moved = applyReschedule(s, target.rowId, "WED", 9 * 60, 10 * 60 + 55);
+    const movedRow = moved.find((x) => x.rowId === target.rowId)!;
+    const afterRow = clashesForSession(s, movedRow);
+
+    // newTotal = oldTotal - before(row) + after(row)
+    expect(allClashes(moved).length).toBe(before - beforeRow + afterRow);
+  });
+
+  it("counts every clash type on one pair separately", () => {
+    // Same cohort, same room, same lecturer, unrelated units at the same slot:
+    // a room, a lecturer AND a cohort clash on the one pair.
+    const s = makeSessions([
+      base({ UNITCODE: "A", UNITNAME: "Discrete Mathematics", ROOMCODE: "101", Faculty: "Dr A", BATCHCODE: "B1" }),
+      base({ UNITCODE: "B", UNITNAME: "Corporate and Business Law", ROOMCODE: "101", Faculty: "Dr A", BATCHCODE: "B1" }),
+    ]);
+    expect(allClashes(s)).toHaveLength(3);
+    expect(clashesForSession(s, s[0])).toBe(3);
+    expect(clashesForSession(s, s[1])).toBe(3);
+  });
+
+  it("ignores rows of one combined class, exactly like the full scan", () => {
+    const s = makeSessions([
+      base({ Programm: "BBAIB", BATCHCODE: "TAXB", UNITCODE: "TAX", UNITNAME: "Taxation", Faculty: "Dr Tax", ROOMCODE: "109" }),
+      base({ Programm: "BBAIM", BATCHCODE: "TAXM", UNITCODE: "ITAX", UNITNAME: "Introduction to Taxation", Faculty: "Dr Tax", ROOMCODE: "109" }),
+    ]);
+    expect(allClashes(s)).toHaveLength(0);
+    expect(clashesForSession(s, s[0])).toBe(0);
+    expect(clashesForSession(s, s[1])).toBe(0);
+  });
+
+  it("honours the type filter", () => {
+    const s = makeSessions([
+      base({ UNITCODE: "A", ROOMCODE: "101", Faculty: "Dr A", BATCHCODE: "B1" }),
+      base({ UNITCODE: "B", ROOMCODE: "101", Faculty: "Dr Z", BATCHCODE: "B2" }),
+    ]);
+    expect(clashesForSession(s, s[0], ["room"])).toBe(1);
+    expect(clashesForSession(s, s[0], ["lecturer"])).toBe(0);
+    expect(clashesForSession(s, s[0], ["batch_code"])).toBe(0);
+  });
+});
+
+describe("corrupt time ranges are never used as slots", () => {
+  /**
+   * Real sheets contain typos like "4:05PM - 6:00AM". Such a range overlaps
+   * nothing, so it looks free at every check — the resolver would then prefer it
+   * over a real slot and quietly corrupt the timetable.
+   */
+  const withTypo = () =>
+    makeSessions([
+      base({ UNITCODE: "U1", ROOMCODE: "101", Faculty: "Dr A", BATCHCODE: "B1", WDAY: "MON" }),
+      base({ UNITCODE: "U2", ROOMCODE: "101", Faculty: "Dr B", BATCHCODE: "B2", WDAY: "MON" }),
+      // the corrupt row the bad slot would be harvested from
+      base({ UNITCODE: "BAD", ROOMCODE: "999", Faculty: "Dr X", BATCHCODE: "B9", WDAY: "TUE", Time: "4:05PM - 6:00AM" }),
+    ]);
+
+  it("rejects a placement whose end is before its start", () => {
+    const s = withTypo();
+    const errs = validatePlacement(
+      s[0].rowId,
+      { ...placementOf(s[0]), day: "WED", startMin: 16 * 60 + 5, endMin: 6 * 60 },
+      s,
+      opts,
+    ).filter((v) => v.severity === "error");
+    expect(errs.length).toBeGreaterThan(0);
+    expect(errs[0].message).toMatch(/ends before it starts/);
+  });
+
+  it("never offers a backwards slot as a reschedule candidate", () => {
+    const s = withTypo();
+    for (const c of rescheduleCandidates(s[1], s, opts)) {
+      expect(c.endMin, `${c.label} must be a real time range`).toBeGreaterThan(c.startMin);
+    }
+    for (const p of reschedulePlans(s[1], s, opts)) {
+      expect(p.endMin).toBeGreaterThan(p.startMin);
+    }
+  });
+
+  it("auto-resolve never moves a class into a backwards slot", () => {
+    const s = withTypo();
+    const res = autoResolve(s, { ...opts, roleRegistry: {}, departmentRegistry: {} }, {});
+    for (const session of res.sessions) {
+      if (session.startMin === null || session.endMin === null) continue;
+      if (session.unitCode === "BAD") continue; // the pre-existing bad row is left alone
+      expect(session.endMin, `${session.unitCode} must keep a real time range`).toBeGreaterThan(
+        session.startMin,
+      );
+    }
   });
 });

@@ -18,7 +18,9 @@ import { applyRoomChange, applyReschedule, applyReschedulePlan, applyTransfer, R
 import { finalizeSession } from "@/lib/ingest";
 import { applyFacultyMerge, facultyDedupMap, mergeLecturer } from "@/lib/faculty";
 import { applyMerge, mergeAllSimilar } from "@/lib/merge";
-import { autoResolve, AutoResolveOptions, ResolveResult } from "@/lib/resolve";
+import {
+  autoResolve, autoResolveSteps, AutoResolveOptions, ResolveProgress, ResolveResult,
+} from "@/lib/resolve";
 import { IngestResult } from "@/lib/pipeline";
 import { ingestFile } from "@/lib/ingest-client";
 import { toast } from "@/store/useToast";
@@ -75,6 +77,11 @@ interface State {
   reschedule: (rowId: number, day: DayCode, startMin: number, endMin: number) => void;
   applyPlan: (rowId: number, plan: ReschedulePlan) => void;
   autoResolve: (opts: AutoResolveOptions, run?: Parameters<typeof autoResolve>[2]) => ResolveResult;
+  autoResolveLive: (
+    opts: AutoResolveOptions,
+    run?: Parameters<typeof autoResolve>[2],
+    onProgress?: (p: ResolveProgress) => void,
+  ) => Promise<ResolveResult>;
   updateSession: (rowId: number, patch: Partial<Session>) => void;
   resetEdits: () => void;
   undo: () => void;
@@ -106,6 +113,12 @@ function pushSnap(s: {
       facultyTypeRegistry: s.facultyTypeRegistry,
     },
   ].slice(-HISTORY_MAX);
+}
+
+/** Merge a resolved subset of sessions back into the full list, preserving order. */
+function spliceTerm(all: Session[], resolved: Session[]): Session[] {
+  const byRowId = new Map(resolved.map((s) => [s.rowId, s]));
+  return all.map((s) => byRowId.get(s.rowId) ?? s);
 }
 
 const PERSIST_KEY = "ttlite-config-v1";
@@ -340,8 +353,42 @@ export const useStore = create<State>((set, get) => ({
   applyPlan: (rowId, plan) =>
     set((s) => ({ history: pushSnap(s), sessions: applyReschedulePlan(s.sessions, rowId, plan) })),
   autoResolve: (opts, run) => {
-    const result = autoResolve(get().sessions, opts, run);
-    set((s) => ({ history: pushSnap(s), sessions: result.sessions }));
+    const { sessions, activeTerm } = get();
+    const result = autoResolve(sessions.filter((x) => x.term === activeTerm), opts, run);
+    set((s) => ({ history: pushSnap(s), sessions: spliceTerm(s.sessions, result.sessions) }));
+    return result;
+  },
+  /**
+   * Same as autoResolve, but driven in short time slices so the browser can
+   * paint between them — the caller gets live progress and the UI never freezes.
+   */
+  autoResolveLive: async (opts, run = {}, onProgress) => {
+    // Resolve only the ACTIVE term. Terms are analysed independently everywhere
+    // else, so silently rescheduling the other term — which the user can't even
+    // see from here — would be both surprising and unreviewable.
+    const { sessions, activeTerm } = get();
+    const iterator = autoResolveSteps(sessions.filter((x) => x.term === activeTerm), opts, run);
+    const SLICE_MS = 40;
+    let step = iterator.next();
+    let latest: ResolveProgress | undefined;
+
+    while (!step.done) {
+      const sliceStart = performance.now();
+      // Burn through as much work as fits in one frame. Progress is reported
+      // ONCE per slice, not once per change — a React re-render costs far more
+      // than the work itself, so reporting every step made the run ~30x slower.
+      while (!step.done && performance.now() - sliceStart < SLICE_MS) {
+        latest = step.value;
+        step = iterator.next();
+      }
+      if (step.done) break;
+      if (latest) onProgress?.(latest);
+      // Hand control back so the browser can paint the progress we just reported.
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    }
+
+    const result = step.value;
+    set((s) => ({ history: pushSnap(s), sessions: spliceTerm(s.sessions, result.sessions) }));
     return result;
   },
   updateSession: (rowId, patch) =>

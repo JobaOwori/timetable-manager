@@ -14,7 +14,7 @@ import {
 } from "@/lib/analysis";
 import { departmentFor } from "@/lib/departments";
 import { searchSessions } from "@/lib/search";
-import { mergeableGroups } from "@/lib/merge";
+import { mergeableGroups, MergeGroup } from "@/lib/merge";
 import { DAY_ORDER } from "@/lib/types";
 
 /** Sessions scoped to the active term (hard isolation boundary). */
@@ -73,6 +73,27 @@ export function useActiveFilterCount(): number {
 /** Groups of duplicate rows that describe ONE teaching session and can be merged. */
 export function useMergeableGroups(sessions: Session[]) {
   return useMemo(() => mergeableGroups(sessions), [sessions]);
+}
+
+/**
+ * rowId -> the mergeable groups it belongs to, derived from ONE scan.
+ *
+ * Every conflict card needs to know whether its rows are really one class; doing
+ * that per card meant re-deriving the groups from all sessions once per card.
+ */
+export function useMergeIndex(sessions: Session[]): Map<number, MergeGroup[]> {
+  const groups = useMergeableGroups(sessions);
+  return useMemo(() => {
+    const index = new Map<number, MergeGroup[]>();
+    for (const g of groups) {
+      for (const rowId of g.rowIds) {
+        const arr = index.get(rowId);
+        if (arr) arr.push(g);
+        else index.set(rowId, [g]);
+      }
+    }
+    return index;
+  }, [groups]);
 }
 
 export function useAnalysis(sessions: Session[]) {

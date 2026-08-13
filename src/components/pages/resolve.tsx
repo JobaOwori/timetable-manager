@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   ArrowRightLeft, CheckCircle2, DoorOpen, User, Users, Clock, Wand2, Info, Loader2, ShieldAlert,
   Merge, Link2, GraduationCap,
 } from "lucide-react";
-import { useFilteredSessions, useAnalysis, useMergeableGroups } from "@/store/selectors";
+import { useFilteredSessions, useAnalysis, useMergeableGroups, useMergeIndex } from "@/store/selectors";
 import { useStore } from "@/store/useStore";
 import { Card, EmptyState, SectionTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,10 +15,10 @@ import { chipProps } from "@/lib/colors";
 import { cn } from "@/lib/cn";
 import { ResolutionPanel } from "@/components/resolution-panel";
 import { FacultyTypeBadge } from "@/components/ui/faculty-badge";
-import { ResolveResult } from "@/lib/resolve";
+import { ResolveProgress, ResolveResult } from "@/lib/resolve";
 import { detectRuleViolations } from "@/lib/validate";
 import { effectiveFacultyType } from "@/lib/facultyType";
-import { MergeGroup, mergeableGroupsTouching } from "@/lib/merge";
+import { MergeGroup } from "@/lib/merge";
 import { toast } from "@/store/useToast";
 
 type Filter = "all" | "lecturer" | "room" | "batch_code";
@@ -69,28 +69,31 @@ export function ResolvePage() {
   // remove the counterpart — hiding a real, unresolved double-booking.
   const { termSessions } = useFilteredSessions();
   const { clashes, summary } = useAnalysis(termSessions);
-  const autoResolve = useStore((s) => s.autoResolve);
+  const autoResolveLive = useStore((s) => s.autoResolveLive);
   const opts = useResolveOpts();
   const [filter, setFilter] = useState<Filter>("all");
   const [result, setResult] = useState<ResolveResult | null>(null);
-  const [resolving, setResolving] = useState(false);
+  const [progress, setProgress] = useState<ResolveProgress | null>(null);
+  const resolving = progress !== null;
 
   const groups = useMemo(() => groupClashes(clashes), [clashes]);
   const shown = filter === "all" ? groups : groups.filter((g) => g.clashType === filter);
 
-  const resolveAll = () => {
+  // Derive the mergeable groups ONCE for the whole page. Each conflict card used
+  // to recompute them from all sessions, so the scan ran ~200 times per render.
+  const mergeableByRow = useMergeIndex(termSessions);
+
+  const resolveAll = async () => {
     if (resolving) return;
     const types = filter === "all" ? undefined : ([filter] as ("lecturer" | "room" | "batch_code")[]);
-    setResolving(true);
-    requestAnimationFrame(() => setTimeout(() => {
-      try {
-        const r = autoResolve(opts, { types });
-        setResult(r);
-        announceResolve(r);
-      } finally {
-        setResolving(false);
-      }
-    }, 0));
+    setProgress({ total: groups.length, cleared: 0, remaining: groups.length, steps: 0, currentUnit: null });
+    try {
+      const r = await autoResolveLive(opts, { types }, setProgress);
+      setResult(r);
+      announceResolve(r);
+    } finally {
+      setProgress(null);
+    }
   };
 
   const chip = (id: Filter, label: string, n: number) => (
@@ -106,6 +109,11 @@ export function ResolvePage() {
     </button>
   );
 
+  const pct =
+    progress && progress.total > 0
+      ? Math.min(100, Math.round((progress.cleared / progress.total) * 100))
+      : 0;
+
   return (
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -117,17 +125,41 @@ export function ResolvePage() {
             resolve everything at once and tell you exactly what it couldn&apos;t fix.
           </p>
         </div>
-        <Button variant="primary" onClick={resolveAll} disabled={groups.length === 0 || resolving}>
-          {resolving ? (
-            <>
-              <Loader2 size={15} className="animate-spin" /> Resolving…
-            </>
-          ) : (
-            <>
-              <Wand2 size={15} /> Auto-resolve {filter === "all" ? "all" : filter}
-            </>
+        <div className="min-w-[15rem]">
+          <Button
+            variant="primary"
+            onClick={resolveAll}
+            disabled={groups.length === 0 || resolving}
+            className="w-full"
+          >
+            {resolving ? (
+              <>
+                <Loader2 size={15} className="animate-spin" />
+                Resolving… {progress!.cleared}/{progress!.total} cleared
+              </>
+            ) : (
+              <>
+                <Wand2 size={15} /> Auto-resolve {filter === "all" ? "all" : filter}
+              </>
+            )}
+          </Button>
+          {resolving && (
+            <div className="mt-1.5 space-y-1" aria-live="polite">
+              <div className="h-1.5 rounded-full bg-surface-2 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-brass transition-all duration-150"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[0.68rem] text-muted font-mono">
+                <span className="truncate">
+                  {progress!.currentUnit ? `Fixing ${progress!.currentUnit}…` : "Scanning timetable…"}
+                </span>
+                <span>{progress!.steps} changes</span>
+              </div>
+            </div>
           )}
-        </Button>
+        </div>
       </div>
 
       {result && <ResolveReport result={result} onDismiss={() => setResult(null)} />}
@@ -151,7 +183,7 @@ export function ResolvePage() {
       ) : (
         <div className="space-y-3">
           {shown.map((g) => (
-            <ConflictCard key={g.key} group={g} />
+            <ConflictCard key={g.key} group={g} mergeableByRow={mergeableByRow} />
           ))}
         </div>
       )}
@@ -429,9 +461,15 @@ const TYPE_META = {
   },
 };
 
-function ConflictCard({ group }: { group: ConflictGroup }) {
+const ConflictCard = memo(function ConflictCard({
+  group,
+  mergeableByRow,
+}: {
+  group: ConflictGroup;
+  mergeableByRow: Map<number, MergeGroup[]>;
+}) {
   const sessions = useStore((s) => s.sessions);
-  const autoResolve = useStore((s) => s.autoResolve);
+  const autoResolveLive = useStore((s) => s.autoResolveLive);
   const mergeSessions = useStore((s) => s.mergeSessions);
   const opts = useResolveOpts();
   const meta = TYPE_META[group.clashType];
@@ -439,28 +477,34 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
     .map((id) => sessions.find((s) => s.rowId === id))
     .filter((s): s is Session => !!s);
   const [resolvingRow, setResolvingRow] = useState<number | null>(null);
-  const [resolvingGroup, setResolvingGroup] = useState(false);
+  const [groupProgress, setGroupProgress] = useState<ResolveProgress | null>(null);
+  const resolvingGroup = groupProgress !== null;
 
-  // Rows of this conflict that are actually ONE teaching session listed twice.
-  const mergeable = useMemo(
-    () => mergeableGroupsTouching(sessions, group.rowIds),
-    [sessions, group.rowIds],
-  );
-
-  const resolveGroup = () => {
-    if (resolvingGroup) return;
-    setResolvingGroup(true);
-    requestAnimationFrame(() => setTimeout(() => {
-      try {
-        const r =
-          group.clashType === "lecturer"
-            ? autoResolve(opts, { lecturer: group.groupValue, types: ["lecturer"] })
-            : autoResolve(opts, { types: [group.clashType] });
-        announceResolve(r);
-      } finally {
-        setResolvingGroup(false);
+  // Rows of this conflict that are actually ONE teaching session listed twice,
+  // looked up from the page-level index rather than rescanning the timetable.
+  const mergeable = useMemo(() => {
+    const wanted = new Set(group.rowIds);
+    const out = new Map<string, MergeGroup>();
+    for (const rowId of group.rowIds) {
+      for (const g of mergeableByRow.get(rowId) ?? []) {
+        if (g.rowIds.filter((id) => wanted.has(id)).length >= 2) out.set(g.key, g);
       }
-    }, 0));
+    }
+    return [...out.values()];
+  }, [mergeableByRow, group.rowIds]);
+
+  const resolveGroup = async () => {
+    if (resolvingGroup) return;
+    setGroupProgress({ total: group.clashes.length, cleared: 0, remaining: group.clashes.length, steps: 0, currentUnit: null });
+    try {
+      const run =
+        group.clashType === "lecturer"
+          ? { lecturer: group.groupValue, types: ["lecturer" as const] }
+          : { types: [group.clashType] };
+      announceResolve(await autoResolveLive(opts, run, setGroupProgress));
+    } finally {
+      setGroupProgress(null);
+    }
   };
 
   const mergeGroup = () => {
@@ -497,7 +541,10 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
           <Button size="sm" variant="outline" onClick={resolveGroup} disabled={resolvingGroup}>
             {resolvingGroup ? (
               <>
-                <Loader2 size={12} className="animate-spin" /> Resolving…
+                <Loader2 size={12} className="animate-spin" />
+                {groupProgress!.currentUnit
+                  ? `Fixing ${groupProgress!.currentUnit}…`
+                  : `Resolving… ${groupProgress!.cleared}/${groupProgress!.total}`}
               </>
             ) : (
               <>
@@ -536,7 +583,7 @@ function ConflictCard({ group }: { group: ConflictGroup }) {
       </div>
     </Card>
   );
-}
+});
 
 function SessionRow({
   session, clashType, open, onToggle,

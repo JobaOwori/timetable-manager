@@ -284,3 +284,48 @@ test("21 · Vercel Web Analytics is wired up", async ({ page }) => {
     `the Vercel analytics script should load; saw scripts: ${JSON.stringify(tags.slice(0, 10))}`,
   ).toBeGreaterThan(0);
 });
+
+test("22 · auto-resolve is fast and shows live progress", async ({ page }) => {
+  await loadTimetable(page);
+  await goTo(page, "Resolve");
+  const btn = page.getByRole("button", { name: /Auto-resolve/ });
+  await btn.waitFor();
+
+  // Record button labels from INSIDE the page, so measuring doesn't perturb it.
+  await page.evaluate(() => {
+    const w = window as unknown as { __labels: string[] };
+    w.__labels = [];
+    const btnEl = [...document.querySelectorAll("button")].find((b) =>
+      /Auto-resolve|Resolving/.test(b.textContent ?? ""),
+    );
+    if (!btnEl) return;
+    new MutationObserver(() => {
+      const t = (btnEl.textContent ?? "").trim();
+      if (t && w.__labels[w.__labels.length - 1] !== t) w.__labels.push(t);
+    }).observe(btnEl, { childList: true, subtree: true, characterData: true });
+  });
+
+  const ms = await page.evaluate(async () => {
+    const btnEl = [...document.querySelectorAll("button")].find((b) =>
+      /Auto-resolve/.test(b.textContent ?? ""),
+    ) as HTMLButtonElement;
+    const t0 = performance.now();
+    btnEl.click();
+    // Wait until the button is enabled again (run complete).
+    await new Promise<void>((resolve) => {
+      const tick = () => (btnEl.disabled ? requestAnimationFrame(tick) : resolve());
+      requestAnimationFrame(tick);
+    });
+    return performance.now() - t0;
+  });
+
+  const labels = await page.evaluate(() => (window as unknown as { __labels: string[] }).__labels);
+  console.log(`auto-resolve wall time: ${ms.toFixed(0)}ms`);
+  console.log("button labels seen:", labels.slice(0, 8));
+
+  await expect(page.getByText(/Conflicts resolved|Partially resolved/)).toBeVisible({ timeout: 30_000 });
+  await shot(page, "22-auto-resolve-progress");
+
+  expect(ms, "auto-resolve should finish quickly").toBeLessThan(6000);
+  expect(labels.some((t) => /Resolving/.test(t)), "progress should be visible").toBeTruthy();
+});
