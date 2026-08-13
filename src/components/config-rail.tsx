@@ -11,6 +11,7 @@ import {
 } from "@/lib/facultyType";
 import { DEPARTMENT_OPTIONS, DEPARTMENT_LABELS } from "@/lib/departments";
 import { minutesToLabel } from "@/lib/clean";
+import { describeOfficialSlots } from "@/lib/slots";
 import { chipProps } from "@/lib/colors";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/cn";
@@ -510,50 +511,49 @@ function ThresholdsSection() {
       <Row label="Far-under %" k="farUnderPct" min={0} max={1} step={0.05} />
       <Row label="Underutilized %" k="underutilPct" min={0} max={1} step={0.05} />
       <Row label="Capacity tolerance" k="capacityTolerance" min={0} max={100} step={1} />
-      <Row label="Max consecutive hrs" k="maxConsecutiveHours" min={2} max={12} step={0.5} />
+      <Row
+        label="Long-run warning (hrs)"
+        k="maxConsecutiveHours"
+        min={2}
+        max={12}
+        step={0.5}
+        hint="Advisory only — teaching every period back to back is allowed."
+      />
       <Row label="Max gap between classes (min)" k="maxGapMinutes" min={0} max={120} step={5} />
 
       <div className="pt-1 border-t border-rule/60">
         <div className="text-[0.66rem] uppercase tracking-wide text-brass mb-1.5">Daily class limits</div>
         <Row
-          label="Max classes/day — Full-Time"
-          k="maxSessionsPerDay"
+          label="Max classes — weekday"
+          k="maxSessionsPerWeekday"
           min={1}
-          max={8}
+          max={4}
           step={1}
-          hint="Per lecturer, per day. A combined class counts once."
+          hint="Per lecturer. A combined class counts once."
         />
         <Row
-          label="Max classes/day — Part-Time"
-          k="maxSessionsPerDayPartTime"
+          label="Max classes — Saturday"
+          k="maxSessionsPerSaturday"
           min={1}
-          max={8}
+          max={3}
           step={1}
-          hint="Part-time staff are paid per session, so they may teach more per day."
+          hint="Saturday has three teaching periods."
         />
+        <p className="text-[0.66rem] text-muted leading-snug mt-0.5">
+          A lecturer may fill every period of the day, back to back. The weekly hour cap per role
+          still applies and is never relaxed.
+        </p>
       </div>
 
       <div className="pt-1 border-t border-rule/60">
-        <div className="text-[0.66rem] uppercase tracking-wide text-brass mb-1.5">Saturday teaching window</div>
-        <Row
-          label="Starts"
-          k="saturdayStartMin"
-          min={6 * 60}
-          max={12 * 60}
-          step={30}
-          format={minutesToLabel}
-        />
-        <Row
-          label="Ends"
-          k="saturdayEndMin"
-          min={12 * 60}
-          max={20 * 60}
-          step={30}
-          format={minutesToLabel}
-        />
-        <p className="text-[0.66rem] text-muted leading-snug mt-0.5">
-          Saturday classes must finish by {minutesToLabel(th.saturdayEndMin)}. Sessions outside the
-          window are listed under Scheduling policy breaches on Resolve.
+        <div className="text-[0.66rem] uppercase tracking-wide text-brass mb-1.5">Official teaching periods</div>
+        <p className="text-[0.66rem] text-muted leading-snug">
+          <span className="text-ink">Mon–Fri</span> {describeOfficialSlots("MON")}
+          <br />
+          <span className="text-ink">Saturday</span> {describeOfficialSlots("SAT")}
+          <br />
+          Nothing is scheduled over lunch. Classes on any other time are listed under Scheduling
+          policy breaches on Resolve, and rescheduling only ever offers these periods.
         </p>
       </div>
 

@@ -247,91 +247,97 @@ test("07 · workload limits are configurable for every role", async ({ page }) =
   await expect(page.locator("table").last().locator("tbody")).toContainText("/22");
 });
 
-test("08 · daily class limits: 3 full-time, 4 part-time", async ({ page }) => {
+test("08 · daily limits are 4 on weekdays and 3 on Saturday", async ({ page }) => {
   await loadTimetable(page);
   await openRail(page);
   await openRailSection(page, "Thresholds");
 
   await expect(page.getByText("Daily class limits")).toBeVisible();
-  const ft = page.getByRole("slider", { name: "Max classes/day — Full-Time" });
-  const pt = page.getByRole("slider", { name: "Max classes/day — Part-Time" });
-  await ft.scrollIntoViewIfNeeded();
-  await expect(ft).toHaveValue("3");
-  await expect(pt).toHaveValue("4");
+  const weekday = page.getByRole("slider", { name: "Max classes — weekday" });
+  const saturday = page.getByRole("slider", { name: "Max classes — Saturday" });
+  await weekday.scrollIntoViewIfNeeded();
+  await expect(weekday).toHaveValue("4");
+  await expect(saturday).toHaveValue("3");
+  // Teaching back to back all day is allowed; the weekly cap is what stays firm.
+  await expect(page.getByText(/may fill every period of the day, back to back/i)).toBeVisible();
+  await expect(page.getByText(/weekly hour cap per role still applies/i)).toBeVisible();
   await shot(page, "08a-daily-limits");
 });
 
-test("09 · Saturday runs 9:00 AM – 4:00 PM and overruns are flagged", async ({ page }) => {
+test("09 · only the official teaching periods are used", async ({ page }) => {
   await loadTimetable(page);
   await openRail(page);
   await openRailSection(page, "Thresholds");
 
-  const start = page.getByRole("slider", { name: "Starts" });
-  const end = page.getByRole("slider", { name: "Ends" });
-  await end.scrollIntoViewIfNeeded();
-  await expect(start).toHaveValue(String(9 * 60));
-  await expect(end).toHaveValue(String(16 * 60));
-  await expect(page.getByText(/Saturday classes must finish by 4:00 PM/)).toBeVisible();
-  await shot(page, "09a-saturday-window-setting");
+  // The official timetable is stated in the controls, lunch kept free.
+  const periods = page.getByText("Official teaching periods", { exact: true });
+  await periods.scrollIntoViewIfNeeded();
+  await expect(periods).toBeVisible();
+  const periodText = await periods.locator("xpath=following-sibling::p[1]").innerText();
+  expect(periodText).toContain("9:00 AM – 11:00 AM, 11:00 AM – 1:00 PM, 2:00 PM – 4:00 PM, 4:00 PM – 6:00 PM");
+  expect(periodText).toMatch(/Saturday\s+9:00 AM – 11:00 AM, 11:00 AM – 1:00 PM, 2:00 PM – 4:00 PM/);
+  expect(periodText).toMatch(/Nothing is scheduled over lunch/);
+
+  // Daily limits: four weekday periods, three on Saturday.
+  const weekday = page.getByRole("slider", { name: "Max classes — weekday" });
+  const saturday = page.getByRole("slider", { name: "Max classes — Saturday" });
+  await weekday.scrollIntoViewIfNeeded();
+  await expect(weekday).toHaveValue("4");
+  await expect(saturday).toHaveValue("3");
+  await shot(page, "09a-official-periods");
 
   await closeRail(page);
+
+  // Every class in the grid sits on an official period.
+  await goTo(page, "Timetable");
+  const slotLabels = await page
+    .locator("table tbody tr td:first-child")
+    .allInnerTexts();
+  const official = new Set([
+    "9:00 AM - 11:00 AM",
+    "11:00 AM - 1:00 PM",
+    "2:00 PM - 4:00 PM",
+    "4:00 PM - 6:00 PM",
+  ]);
+  // The four official weekday periods must all be present…
+  for (const period of official) {
+    expect(slotLabels.map((t) => t.trim())).toContain(period);
+  }
+  // …and only a handful of unrepairable typos from the source sheet may remain,
+  // each of which is reported under Scheduling policy breaches.
+  const unofficial = slotLabels.map((t) => t.trim()).filter((t) => t && !official.has(t));
+  expect(unofficial.length, `unexpected slots: ${unofficial.join(" | ")}`).toBeLessThanOrEqual(3);
+  await shotFull(page, "09b-official-grid");
+
+  // Anything not on an official period is reported for a human to fix.
   await goTo(page, "Resolve");
+  const badge = page.getByText("Not an official teaching period").first();
+  if (await badge.isVisible().catch(() => false)) {
+    await badge.scrollIntoViewIfNeeded();
+    await expect(page.getByText(/Teaching only happens in fixed two-hour periods/).first()).toBeVisible();
+    await shot(page, "09c-unofficial-flagged");
 
-  // Saturday sessions that overrun 4 PM appear as policy violations.
-  const policy = page.getByText("Scheduling policy breaches", { exact: true });
-  await expect(policy).toBeVisible();
-  await policy.scrollIntoViewIfNeeded();
-  const satBadge = page.getByText("Outside Saturday teaching hours").first();
-  await expect(satBadge).toBeVisible();
-  await shot(page, "09b-saturday-violations");
+    // And fixing one only ever offers official periods.
+    const fix = page.getByRole("button", { name: /^Fix .*Not an official teaching period$/ }).first();
+    await fix.scrollIntoViewIfNeeded();
+    await fix.click();
+    await page.waitForTimeout(600);
+    await page.getByRole("button", { name: "Reschedule", exact: true }).first().click();
+    await page.waitForTimeout(900);
 
-  // The message states the window and the offending time.
-  await expect(page.getByText(/Saturday classes run 9:00 AM–4:00 PM/).first()).toBeVisible();
-
-  // Fixing one only offers Saturday slots that finish by 4 PM.
-  const fix = page
-    .getByRole("button", { name: /^Fix .*Outside Saturday teaching hours$/ })
-    .first();
-  await fix.scrollIntoViewIfNeeded();
-  await fix.click();
-  await page.waitForTimeout(800);
-  await page.getByRole("button", { name: "Reschedule", exact: true }).first().click();
-  await page.waitForTimeout(1000);
-  await shotFull(page, "09c-saturday-fix-panel");
-
-  // Whatever it offers, any SATURDAY option must finish by 4:00 PM. (A weekday
-  // programme wrongly placed on Saturday is correctly offered weekdays instead,
-  // so the absence of Saturday options is fine — a bad one never is.)
-  const options = await page
-    .locator("button[aria-label]")
-    .evaluateAll((els) =>
-      els.map((e) => e.getAttribute("aria-label") ?? "")
-        .filter((a) => /^(MON|TUE|WED|THU|FRI|SAT) /.test(a)),
-    );
-
-  if (options.length === 0) {
-    await expect(page.getByText(/No conflict-free slot exists/)).toBeVisible();
-    return;
-  }
-
-  for (const label of options.filter((l) => l.startsWith("SAT "))) {
-    const m = label.match(/SAT\s+(\d+):(\d+)\s*(AM|PM)\s*-\s*(\d+):(\d+)\s*(AM|PM)/i);
-    if (!m) continue;
-    const endHour = (Number(m[4]) % 12) + (m[6].toUpperCase() === "PM" ? 12 : 0);
-    const endMin = endHour * 60 + Number(m[5]);
-    expect(endMin, `Saturday option "${label}" must finish by 4:00 PM`).toBeLessThanOrEqual(16 * 60);
-  }
-
-  // And every option must be a real, forward-running time range.
-  for (const label of options) {
-    const m = label.match(/(\d+):(\d+)\s*(AM|PM)\s*-\s*(\d+):(\d+)\s*(AM|PM)/i);
-    if (!m) continue;
-    const toMin = (h: string, mm: string, ap: string) =>
-      ((Number(h) % 12) + (ap.toUpperCase() === "PM" ? 12 : 0)) * 60 + Number(mm);
-    expect(
-      toMin(m[4], m[5], m[6]),
-      `option "${label}" must end after it starts`,
-    ).toBeGreaterThan(toMin(m[1], m[2], m[3]));
+    const options = await page
+      .locator("button[aria-label]")
+      .evaluateAll((els) =>
+        els.map((e) => e.getAttribute("aria-label") ?? "")
+          .filter((a) => /^(MON|TUE|WED|THU|FRI|SAT) /.test(a)),
+      );
+    for (const label of options) {
+      const time = label.replace(/^(MON|TUE|WED|THU|FRI|SAT) /, "").split(" · ")[0].trim();
+      expect(official.has(time), `offered "${label}" which is not an official period`).toBeTruthy();
+      // Saturday never gets the 4–6 PM period.
+      if (label.startsWith("SAT ")) expect(time).not.toBe("4:00 PM - 6:00 PM");
+    }
+    await shotFull(page, "09d-official-options-only");
   }
 });
 

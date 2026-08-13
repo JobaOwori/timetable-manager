@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clash, DAY_NAME, Session } from "@/lib/types";
 import { chipProps } from "@/lib/colors";
+import { describeOfficialSlots } from "@/lib/slots";
 import { cn } from "@/lib/cn";
 import { ResolutionPanel } from "@/components/resolution-panel";
 import { FacultyTypeBadge } from "@/components/ui/faculty-badge";
@@ -643,9 +644,9 @@ const RULE_META: Record<
   { label: string; tone: "danger" | "warn" | "info"; why: string; fix: string }
 > = {
   max_per_day: {
-    label: "Too many classes in one day",
+    label: "More classes than the day has periods",
     tone: "warn",
-    why: "A lecturer may only teach a limited number of classes per day (3 for full-time staff, 4 for part-time, who are paid per session).",
+    why: "A weekday has four teaching periods and Saturday has three, so a lecturer can teach at most that many classes in a day — back to back is fine.",
     fix: "Move one of the day's classes to another day, or hand it to a colleague.",
   },
   faculty_rule: {
@@ -661,10 +662,12 @@ const RULE_META: Record<
     fix: "Move the class to a day the programme actually teaches on.",
   },
   time_window: {
-    label: "Outside Saturday teaching hours",
+    label: "Not an official teaching period",
     tone: "danger",
-    why: "Saturday classes run from 9:00 AM to 4:00 PM and must finish by 4:00 PM.",
-    fix: "Move the class to a Saturday slot that ends by 4:00 PM.",
+    why: `Teaching only happens in fixed two-hour periods, with lunch kept free — weekdays ${describeOfficialSlots(
+      "MON",
+    )}, and Saturday ${describeOfficialSlots("SAT")}.`,
+    fix: "Move the class to one of the official periods — the Fix panel only offers those.",
   },
 };
 

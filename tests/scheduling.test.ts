@@ -62,19 +62,19 @@ describe("part-time is restricted to the Lecturer role", () => {
     expect(effectiveFacultyType("X", {}, { X: "PT" })).toBe("PT");
   });
 
-  it("applies the Full-Time daily class limit to a PT-flagged H.O.D.", () => {
+  it("applies the H.O.D. weekly cap to a PT-flagged H.O.D.", () => {
+    // The daily limit is the same for everyone now, but the WEEKLY cap is not:
+    // flagging an H.O.D. part-time must not buy them the part-time allowance.
     const s = makeSessions([
-      base({ Faculty: "Dr H", Time: "8:00AM - 9:00AM", UNITCODE: "A", ROOMCODE: "101" }),
-      base({ Faculty: "Dr H", Time: "9:30AM - 10:30AM", UNITCODE: "B", ROOMCODE: "102", BATCHCODE: "B2" }),
-      base({ Faculty: "Dr H", Time: "11:00AM - 12:00PM", UNITCODE: "C", ROOMCODE: "103", BATCHCODE: "B3" }),
-      base({ Faculty: "Dr H", Time: "1:00PM - 2:00PM", UNITCODE: "D", ROOMCODE: "104", BATCHCODE: "B4" }),
+      base({ Faculty: "Dr H", WDAY: "MON", Time: "9:00AM - 11:00AM", Hours: 15, UNITCODE: "A", ROOMCODE: "101" }),
+      base({ Faculty: "Dr H", WDAY: "TUE", Time: "9:00AM - 11:00AM", Hours: 2, UNITCODE: "B", ROOMCODE: "102", BATCHCODE: "B2" }),
     ]);
     const cfg = { ...opts, roleRegistry: { "Dr H": "H.O.D." }, facultyTypeRegistry: { "Dr H": "PT" as const } };
-    const errs = validatePlacement(s[3].rowId, placementOf(s[3]), s, cfg).filter(
-      (v) => v.kind === "max_per_day",
+    const errs = validatePlacement(s[1].rowId, placementOf(s[1]), s, cfg).filter(
+      (v) => v.kind === "workload" && v.severity === "error",
     );
     expect(errs).toHaveLength(1);
-    expect(errs[0].message).toMatch(/max 3 per day for Full-Time/);
+    expect(errs[0].message).toMatch(/16h weekly limit for H\.O\.D\./);
   });
 
   it("reports a PT-flagged Dean as Full-Time in the workload report", () => {
@@ -127,18 +127,18 @@ describe("reschedule planning", () => {
   });
 
   it("checks room availability and moves room when the slot needs it", () => {
-    // Only one alternative slot exists, and room 101 is taken in it — the plan
-    // must therefore propose a different room rather than give up.
+    // Monday is the only teaching day, and room 101 is occupied in every other
+    // period — so any plan has to propose a different room.
     const s = makeSessions([
-      base({ UNITCODE: "U1", ROOMCODE: "101", Faculty: "Dr A", BATCHCODE: "B1" }),
-      base({ UNITCODE: "U2", ROOMCODE: "101", Faculty: "Dr A", BATCHCODE: "B1" }),
-      base({ UNITCODE: "U3", WDAY: "TUE", ROOMCODE: "101", Faculty: "Dr C", BATCHCODE: "B9" }),
-      base({ UNITCODE: "U4", WDAY: "TUE", ROOMCODE: "202", Faculty: "Dr D", BATCHCODE: "B8" }),
+      base({ UNITCODE: "U1", WDAY: "MON", Time: "9:00AM - 11:00AM", ROOMCODE: "101", Faculty: "Dr A", BATCHCODE: "B1" }),
+      base({ UNITCODE: "U2", WDAY: "MON", Time: "9:00AM - 11:00AM", ROOMCODE: "101", Faculty: "Dr A", BATCHCODE: "B1" }),
+      base({ UNITCODE: "H1", WDAY: "MON", Time: "11:00AM - 1:00PM", ROOMCODE: "101", Faculty: "Dr P", BATCHCODE: "B7" }),
+      base({ UNITCODE: "H2", WDAY: "MON", Time: "2:00PM - 4:00PM", ROOMCODE: "101", Faculty: "Dr Q", BATCHCODE: "B8" }),
+      base({ UNITCODE: "H3", WDAY: "MON", Time: "4:00PM - 6:00PM", ROOMCODE: "101", Faculty: "Dr R", BATCHCODE: "B9" }),
     ]);
     const plans = reschedulePlans(s[1], s, { ...opts, roomRegistry: { "101": 30, "202": 30, "303": 40 } });
-    const tue = plans.filter((p) => p.day === "TUE");
-    expect(tue.length).toBeGreaterThan(0);
-    for (const p of tue) expect(p.room).not.toBe("101");
+    expect(plans.length).toBeGreaterThan(0);
+    for (const p of plans) expect(p.room).not.toBe("101");
   });
 
   it("falls back to another lecturer only when nothing else fits", () => {

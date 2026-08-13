@@ -6,6 +6,7 @@ import {
   RoomRegistry,
   Session,
 } from "./types";
+import { snapToOfficialSlot } from "./slots";
 import {
   formatTimeRange,
   isBlank,
@@ -17,6 +18,7 @@ import {
   parseTimeRange,
   toNumber,
 } from "./clean";
+import type { ParsedTime } from "./clean";
 
 // Canonical field -> header aliases (normalized: lowercase, alnum only).
 const COLUMN_ALIASES: Record<CanonicalField, string[]> = {
@@ -202,7 +204,16 @@ export function buildSessions(rows: Record<string, unknown>[], mapping: ColumnMa
       return src !== undefined ? row[src] : null;
     };
 
-    const parsed = parseTimeRange(get("timeRaw"));
+    const rawTime = parseTimeRange(get("timeRaw"));
+    const day = normalizeDay(get("day"));
+    // Fold the sheet's many spellings of a period ("9:00AM - 10:55AM",
+    // "11:05AM - 1:00PM", "2:00PM-3:55PM") onto the official period they mean.
+    // Times that aren't a variant of one — a lunch-hour class, a 5:45 PM start —
+    // are left exactly as written and reported instead of being moved.
+    const official = snapToOfficialSlot(day, rawTime.startMin, rawTime.endMin);
+    const parsed = official
+      ? { startMin: official.startMin, endMin: official.endMin, error: null as ParsedTime["error"] }
+      : rawTime;
     const hoursListed = toNumber(get("hours"));
     const computedDuration =
       parsed.startMin !== null && parsed.endMin !== null && parsed.endMin > parsed.startMin
@@ -229,7 +240,7 @@ export function buildSessions(rows: Record<string, unknown>[], mapping: ColumnMa
       unitCode: normalizeText(get("unitCode")),
       unitName: normalizeText(get("unitName")),
       term: normalizeCode(get("term"), false),
-      day: normalizeDay(get("day")),
+      day,
       dayRaw: normalizeText(get("day")),
       timeRaw: normalizeText(get("timeRaw")),
       startMin: parsed.startMin,

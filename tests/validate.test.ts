@@ -41,7 +41,7 @@ describe("validatePlacement", () => {
       base({ UNITCODE: "OTHER", Faculty: "Dr Y", ROOMCODE: "102", WDAY: "TUE", BATCHCODE: "B2", Time: "2:00PM - 3:55PM" }),
     ]);
     const move = s.find((x) => x.unitCode === "MOVE")!;
-    const v = validatePlacement(move.rowId, { ...placementOf(move), day: "TUE", startMin: 840, endMin: 955 }, s, opts);
+    const v = validatePlacement(move.rowId, { ...placementOf(move), day: "TUE", startMin: 16 * 60, endMin: 18 * 60 }, s, opts);
     expect(v.length).toBe(0);
   });
 
@@ -77,17 +77,17 @@ describe("validatePlacement", () => {
     expect(v.some((x) => x.kind === "workload")).toBe(true);
   });
 
-  it("flags a consecutive-hours breach", () => {
-    // Build a MON run 9:00-15:55 already (7h) for Dr Run, then place another adjacent.
+  it("reports a long back-to-back run as advice, not a blocker", () => {
+    // Dr Run already has the two morning periods; adding the afternoon ones
+    // makes a long day, which is allowed.
     const s = makeSessions([
-      base({ UNITCODE: "R1", Faculty: "Dr Run", WDAY: "MON", Time: "9:00AM - 12:55PM", ROOMCODE: "109", BATCHCODE: "B1" }),
-      base({ UNITCODE: "R2", Faculty: "Dr Run", WDAY: "MON", Time: "1:00PM - 3:55PM", ROOMCODE: "109", BATCHCODE: "B2" }),
-      base({ UNITCODE: "MV", Faculty: "Dr Run", WDAY: "TUE", Time: "9:00AM - 10:55AM", ROOMCODE: "109", BATCHCODE: "B3" }),
+      base({ UNITCODE: "R1", Faculty: "Dr Run", WDAY: "MON", Time: "9:00AM - 11:00AM", ROOMCODE: "109", BATCHCODE: "B1" }),
+      base({ UNITCODE: "R2", Faculty: "Dr Run", WDAY: "MON", Time: "11:00AM - 1:00PM", ROOMCODE: "109", BATCHCODE: "B2" }),
+      base({ UNITCODE: "MV", Faculty: "Dr Run", WDAY: "TUE", Time: "9:00AM - 11:00AM", ROOMCODE: "109", BATCHCODE: "B3" }),
     ]);
     const mv = s.find((x) => x.unitCode === "MV")!;
-    // place MV MON 4:00-5:55 right after the run -> long consecutive block
-    const v = validatePlacement(mv.rowId, { ...placementOf(mv), day: "MON", startMin: 960, endMin: 1075 }, s, opts);
-    expect(v.some((x) => x.kind === "consecutive")).toBe(true);
+    const v = validatePlacement(mv.rowId, { ...placementOf(mv), day: "MON", startMin: 14 * 60, endMin: 16 * 60 }, s, opts);
+    expect(v.filter((x) => x.kind === "consecutive" && x.severity === "error")).toHaveLength(0);
   });
 
   it("distinguishes capacity warning (within tolerance) from error (beyond)", () => {
@@ -113,29 +113,34 @@ describe("validatePlacement", () => {
     expect(v.length).toBe(0);
   });
 
-  it("enforces a maximum of three sessions per lecturer per day", () => {
+  it("allows four weekday classes but not a fifth", () => {
     const s = makeSessions([
-      base({ UNITCODE: "D1", Faculty: "Dr Day", WDAY: "MON", Time: "8:00AM - 8:55AM", Hours: 1, ROOMCODE: "201", BATCHCODE: "B1" }),
-      base({ UNITCODE: "D2", Faculty: "Dr Day", WDAY: "MON", Time: "10:00AM - 10:55AM", Hours: 1, ROOMCODE: "202", BATCHCODE: "B2" }),
-      base({ UNITCODE: "D3", Faculty: "Dr Day", WDAY: "MON", Time: "1:00PM - 1:55PM", Hours: 1, ROOMCODE: "203", BATCHCODE: "B3" }),
-      base({ UNITCODE: "MOVE", Faculty: "Dr Other", WDAY: "TUE", Time: "3:00PM - 3:55PM", Hours: 1, ROOMCODE: "204", BATCHCODE: "B4" }),
+      base({ UNITCODE: "D1", Faculty: "Dr Day", WDAY: "MON", Time: "9:00AM - 11:00AM", Hours: 1, ROOMCODE: "201", BATCHCODE: "B1" }),
+      base({ UNITCODE: "D2", Faculty: "Dr Day", WDAY: "MON", Time: "11:00AM - 1:00PM", Hours: 1, ROOMCODE: "202", BATCHCODE: "B2" }),
+      base({ UNITCODE: "D3", Faculty: "Dr Day", WDAY: "MON", Time: "2:00PM - 4:00PM", Hours: 1, ROOMCODE: "203", BATCHCODE: "B3" }),
+      base({ UNITCODE: "MOVE", Faculty: "Dr Other", WDAY: "TUE", Time: "2:00PM - 4:00PM", Hours: 1, ROOMCODE: "204", BATCHCODE: "B4" }),
     ]);
     const move = s.find((x) => x.unitCode === "MOVE")!;
-    const fourthMonday = validatePlacement(
+    // The 4th Monday period is free — allowed.
+    const fourth = validatePlacement(
       move.rowId,
-      { ...placementOf(move), lecturer: "Dr Day", day: "MON", startMin: 900, endMin: 955 },
+      { ...placementOf(move), lecturer: "Dr Day", day: "MON", startMin: 16 * 60, endMin: 18 * 60 },
       s,
       opts,
     );
-    expect(fourthMonday.some((x) => x.kind === "max_per_day")).toBe(true);
+    expect(fourth.some((x) => x.kind === "max_per_day")).toBe(false);
 
-    const differentDay = validatePlacement(
+    // With all four taken, a fifth cannot fit.
+    const full = makeSessions([
+      base({ UNITCODE: "D4", Faculty: "Dr Day", WDAY: "MON", Time: "4:00PM - 6:00PM", Hours: 1, ROOMCODE: "205", BATCHCODE: "B5" }),
+    ]).map((x) => ({ ...x, rowId: 99 }));
+    const fifth = validatePlacement(
       move.rowId,
-      { ...placementOf(move), lecturer: "Dr Day", day: "WED", startMin: 900, endMin: 955 },
-      s,
+      { ...placementOf(move), lecturer: "Dr Day", day: "MON", startMin: 9 * 60, endMin: 11 * 60 },
+      [...s, ...full],
       opts,
     );
-    expect(differentDay.some((x) => x.kind === "max_per_day")).toBe(false);
+    expect(fifth.some((x) => x.kind === "max_per_day")).toBe(true);
   });
 
   it("blocks full-time lecturers in the Friday 4-6 PM slot but allows part-time and earlier FT slots", () => {

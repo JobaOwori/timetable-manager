@@ -35,8 +35,15 @@ backend, no database, and no server round-trips (so no refresh lag).
   the Part-Time option is disabled for them and promoting a part-timer to H.O.D. moves
   them back to Full-Time automatically. Every role's weekly-hour cap is adjustable in
   *Workload Limits by Role* and persists across reloads.
-- **Daily class limits** — max 3 classes/day for full-time staff and **4 for part-time**
-  (they are paid per teaching session), both configurable.
+- **📐 Official teaching periods** — teaching runs in fixed two-hour periods with
+  lunch kept free: **Mon–Fri 9–11, 11–1, 2–4, 4–6** and **Saturday 9–11, 11–1, 2–4**.
+  Imported times are folded onto the period they mean ("9:00AM - 10:55AM", "11:05AM
+  - 1:00PM", even an unambiguous "2:00 AM - 3:55 PM" AM/PM slip), and anything that
+  genuinely isn't a period — a lunch-hour class, a 5:45 PM start — is reported rather
+  than silently moved. Rescheduling only ever offers official periods.
+- **Daily class limits** — a lecturer may take up to **4 classes on a weekday** and
+  **3 on Saturday**, back to back if need be; that is simply every period the day has.
+  The weekly hour cap per role is **never** relaxed.
 - **📅 Informative timetable entries** — every class shows its **course code, course
   name, lecturer, room, and all attending programmes and cohorts** right in the grid,
   colour-coded by faculty. Click any entry for the full details (including a per-cohort
@@ -49,9 +56,7 @@ backend, no database, and no server round-trips (so no refresh lag).
   offering it, so only genuinely conflict-free options appear. It prefers the smallest
   change (same room and lecturer first), never lets a pre-existing, unrelated breach
   veto a valid fix, and when nothing works it names the exact blocker.
-- **Saturday window** — Saturday teaching runs **9:00 AM – 4:00 PM**. Classes that
-  overrun are listed under *Policy rule violations*, and rescheduling only ever offers
-  Saturday slots that finish by 4:00 PM.
+- **Saturday** — three periods, finishing at **4:00 PM**. There is no Saturday 4–6.
 - **Search & filtering** — one search box across unit code/name, lecturer, room,
   programme, cohort, day, time and notes, with `field:value` qualifiers
   (`room:109`, `lecturer:tax`), `"quoted phrases"` and `-exclusions`; plus searchable,
@@ -106,7 +111,8 @@ src/
 │   ├── ingest.ts         SheetJS parsing, column auto-map, room-registry parse,
 │   │                     canonical Session build, edit finalize
 │   ├── roles.ts          Role -> max-hours; only a Lecturer may be Part-Time
-│   ├── facultyType.ts    FT/PT model, programme level, Friday block, SAT window
+│   ├── facultyType.ts    FT/PT model, programme level, Friday block
+│   ├── slots.ts          The official teaching periods + snapping messy times
 │   ├── classDetails.ts   Full class description: programmes + cohorts attending
 │   ├── subjectGroup.ts   Equivalent-subject families + title similarity
 │   ├── sharedClass.ts    Combined/shared-class detection (clash suppression)
@@ -156,7 +162,7 @@ own hand-written "LECTURER TIME CLASHING" annotations (see `tests/sample.test.ts
 
 ## Testing
 
-`pnpm test` runs 142 vitest tests: normalization edge cases, clash/workload/capacity
+`pnpm test` runs 156 vitest tests: normalization edge cases, clash/workload/capacity
 logic, equivalent-subject and merge behaviour, the scheduling policies (Saturday
 window, per-role caps, full-time vs part-time daily limits), search parsing, the
 transfer/candidate ranking, the reschedule planner (validity, minimal-change ranking
@@ -164,7 +170,7 @@ and blocker explanations), cohort views and class-detail aggregation, and an
 integration suite that loads the real sample xlsx and asserts parity with the Python
 engine's outputs.
 
-`pnpm test:e2e` runs 21 Playwright end-to-end tests against a running server. They
+`pnpm test:e2e` runs 22 Playwright end-to-end tests against a running server. They
 upload the **real 980-session Fall-2026 workbook** (`e2e/fixtures/`) and drive the app
 as a scheduler would — search and filtering, faculty colour coding, merging similar
 courses, right-click role assignment, the Part-Time restriction, the configurable role

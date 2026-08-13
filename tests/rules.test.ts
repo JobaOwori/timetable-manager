@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { buildSessions, autoMapColumns } from "@/lib/ingest";
 import { validatePlacement, placementOf, detectRuleViolations } from "@/lib/validate";
-import { rescheduleCandidates } from "@/lib/transfer";
 import { lecturerWorkload } from "@/lib/analysis";
-import { DEFAULT_THRESHOLDS } from "@/lib/types";
-import { SATURDAY_WINDOW, withinSaturdayWindow } from "@/lib/facultyType";
+import { DEFAULT_THRESHOLDS, DayCode } from "@/lib/types";
+import { WEEKDAY_SLOTS, SATURDAY_SLOTS, isOfficialSlot, snapToOfficialSlot } from "@/lib/slots";
+import { rescheduleCandidates, reschedulePlans } from "@/lib/transfer";
 import { ROLE_MAX_HOURS, PART_TIME_ROLE, maxHoursFor, withRoleDefaults } from "@/lib/roles";
 import { searchSessions, parseQuery, highlightTerms } from "@/lib/search";
 
@@ -33,117 +33,178 @@ function makeSessions(rows: (string | number | null)[][]) {
 
 const opts = { thresholds: DEFAULT_THRESHOLDS, roleMaxHours: ROLE_MAX_HOURS };
 
-describe("Saturday 9:00 AM – 4:00 PM teaching window", () => {
-  it("defaults to 9 AM–4 PM", () => {
-    expect(SATURDAY_WINDOW.startMin).toBe(9 * 60);
-    expect(SATURDAY_WINDOW.endMin).toBe(16 * 60);
-    expect(DEFAULT_THRESHOLDS.saturdayStartMin).toBe(9 * 60);
-    expect(DEFAULT_THRESHOLDS.saturdayEndMin).toBe(16 * 60);
-  });
-
-  it("accepts a slot inside the window and rejects one that overruns 4 PM", () => {
-    expect(withinSaturdayWindow(9 * 60, 11 * 60)).toBe(true);
-    expect(withinSaturdayWindow(14 * 60, 16 * 60)).toBe(true);
-    expect(withinSaturdayWindow(16 * 60, 18 * 60)).toBe(false);
-    expect(withinSaturdayWindow(8 * 60, 10 * 60)).toBe(false);
-  });
-
-  it("flags a Saturday class that ends at 6 PM as a policy violation", () => {
-    const s = makeSessions([
-      base({ Programm: "MSCIT", WDAY: "SAT", Time: "4:00PM - 6:00PM", ROOMCODE: "301" }),
+describe("official teaching periods", () => {
+  it("defines four weekday periods and three on Saturday, with lunch free", () => {
+    expect(WEEKDAY_SLOTS.map((x) => [x.startMin / 60, x.endMin / 60])).toEqual([
+      [9, 11], [11, 13], [14, 16], [16, 18],
     ]);
-    const errs = validatePlacement(s[0].rowId, placementOf(s[0]), s, opts).filter(
-      (v) => v.severity === "error",
-    );
-    expect(errs.some((e) => e.kind === "time_window")).toBe(true);
-    expect(errs.find((e) => e.kind === "time_window")!.message).toMatch(/9:00 AM.*4:00 PM/);
-
-    const rules = detectRuleViolations(s, opts);
-    expect(rules.some((r) => r.kind === "time_window")).toBe(true);
+    expect(SATURDAY_SLOTS.map((x) => [x.startMin / 60, x.endMin / 60])).toEqual([
+      [9, 11], [11, 13], [14, 16],
+    ]);
+    // Nothing runs over lunch (1–2 PM) and Saturday stops at 4 PM.
+    expect(isOfficialSlot("MON", 13 * 60, 14 * 60)).toBe(false);
+    expect(isOfficialSlot("SAT", 16 * 60, 18 * 60)).toBe(false);
+    expect(isOfficialSlot("MON", 16 * 60, 18 * 60)).toBe(true);
   });
 
-  it("accepts a Saturday class that finishes by 4 PM", () => {
-    const s = makeSessions([
-      base({ Programm: "MSCIT", WDAY: "SAT", Time: "2:00PM - 4:00PM", ROOMCODE: "301" }),
-    ]);
-    const errs = validatePlacement(s[0].rowId, placementOf(s[0]), s, opts).filter(
-      (v) => v.severity === "error",
-    );
-    expect(errs).toHaveLength(0);
+  it("folds the sheet's spellings of a period onto that period", () => {
+    const snap = (day: DayCode, a: number, b: number) => {
+      const r = snapToOfficialSlot(day, a, b);
+      return r ? [r.startMin / 60, r.endMin / 60] : null;
+    };
+    expect(snap("MON", 9 * 60, 10 * 60 + 55)).toEqual([9, 11]);
+    expect(snap("MON", 11 * 60 + 5, 13 * 60)).toEqual([11, 13]);
+    expect(snap("MON", 14 * 60, 15 * 60 + 55)).toEqual([14, 16]);
+    expect(snap("MON", 16 * 60 + 5, 18 * 60)).toEqual([16, 18]);
+    // …but never invents a period for a genuinely different time.
+    expect(snap("MON", 13 * 60, 14 * 60)).toBeNull(); // lunch hour
+    expect(snap("FRI", 17 * 60 + 45, 20 * 60)).toBeNull(); // evening
+    expect(snap("SAT", 16 * 60 + 5, 18 * 60)).toBeNull(); // no Saturday 4–6
   });
 
-  it("only offers Saturday slots that finish by 4 PM when rescheduling", () => {
+  it("rejects any placement that is not an official period", () => {
+    const s = makeSessions([base({ WDAY: "MON", Time: "9:00AM - 11:00AM" })]);
+    const lunch = validatePlacement(
+      s[0].rowId,
+      { ...placementOf(s[0]), day: "MON", startMin: 13 * 60, endMin: 14 * 60 },
+      s,
+      opts,
+    ).filter((v) => v.severity === "error");
+    expect(lunch.some((e) => e.kind === "time_window")).toBe(true);
+    expect(lunch.find((e) => e.kind === "time_window")!.message).toMatch(/not an official/i);
+
+    // Saturday has no 4–6 PM period.
+    const lateSat = validatePlacement(
+      s[0].rowId,
+      { ...placementOf(s[0]), day: "SAT", startMin: 16 * 60, endMin: 18 * 60 },
+      s,
+      opts,
+    ).filter((v) => v.kind === "time_window");
+    expect(lateSat).toHaveLength(1);
+  });
+
+  it("only ever offers official periods when rescheduling", () => {
     const s = makeSessions([
-      base({ Programm: "MSCIT", WDAY: "SAT", Time: "4:00PM - 6:00PM", ROOMCODE: "301" }),
+      base({ UNITCODE: "U1", WDAY: "MON", Time: "9:00AM - 11:00AM", ROOMCODE: "101", BATCHCODE: "B1" }),
+      base({ UNITCODE: "U2", WDAY: "MON", Time: "9:00AM - 11:00AM", ROOMCODE: "102", BATCHCODE: "B1" }),
     ]);
-    const sat = rescheduleCandidates(s[0], s, opts).filter((c) => c.day === "SAT");
-    expect(sat.length).toBeGreaterThan(0);
-    for (const c of sat) {
-      expect(c.startMin).toBeGreaterThanOrEqual(9 * 60);
-      expect(c.endMin).toBeLessThanOrEqual(16 * 60);
+    const offered = [
+      ...rescheduleCandidates(s[1], s, opts).map((c) => ({ d: c.day, a: c.startMin, b: c.endMin })),
+      ...reschedulePlans(s[1], s, opts).map((p) => ({ d: p.day, a: p.startMin, b: p.endMin })),
+    ];
+    expect(offered.length).toBeGreaterThan(0);
+    for (const o of offered) {
+      expect(isOfficialSlot(o.d, o.a, o.b), `${o.d} ${o.a}-${o.b} must be official`).toBe(true);
     }
   });
 
-  it("honours a customised Saturday window", () => {
-    const s = makeSessions([
-      base({ Programm: "MSCIT", WDAY: "SAT", Time: "4:00PM - 6:00PM", ROOMCODE: "301" }),
-    ]);
-    const late = {
-      thresholds: { ...DEFAULT_THRESHOLDS, saturdayEndMin: 18 * 60 },
-      roleMaxHours: ROLE_MAX_HOURS,
+  it("recovers an obvious AM/PM slip, but never guesses", () => {
+    const snap = (day: DayCode, a: number, b: number) => {
+      const r = snapToOfficialSlot(day, a, b);
+      return r ? [r.startMin / 60, r.endMin / 60] : null;
     };
-    const errs = validatePlacement(s[0].rowId, placementOf(s[0]), s, late).filter(
-      (v) => v.kind === "time_window",
-    );
-    expect(errs).toHaveLength(0);
+    // "2:00 AM - 3:55 PM" can only mean the afternoon period.
+    expect(snap("MON", 2 * 60, 15 * 60 + 55)).toEqual([14, 16]);
+    // "9:05 AM - 10:55 PM" — the END carries the slip.
+    expect(snap("MON", 9 * 60 + 5, 22 * 60 + 55)).toEqual([9, 11]);
+    // "11:05 PM - 1:00 PM" — the START carries it.
+    expect(snap("MON", 23 * 60 + 5, 13 * 60)).toEqual([11, 13]);
+
+    // A well-formed time is never "repaired".
+    expect(snap("MON", 13 * 60, 14 * 60)).toBeNull();
+    // Saturday has no 4–6 PM period, so flipping the end helps nothing.
+    expect(snap("SAT", 16 * 60 + 5, 6 * 60)).toBeNull();
+  });
+
+  it("snaps messy times on the way in", () => {
+    const s = makeSessions([
+      base({ WDAY: "MON", Time: "9:00AM - 10:55AM" }),
+      base({ WDAY: "SAT", Time: "2:00PM-3:55PM", Programm: "MSCIT" }),
+      base({ WDAY: "FRI", Time: "5:45PM - 8:00PM" }),
+    ]);
+    expect([s[0].startMin, s[0].endMin]).toEqual([9 * 60, 11 * 60]);
+    expect([s[1].startMin, s[1].endMin]).toEqual([14 * 60, 16 * 60]);
+    // Left untouched, so it can be reported rather than silently moved.
+    expect([s[2].startMin, s[2].endMin]).toEqual([17 * 60 + 45, 20 * 60]);
   });
 });
 
-describe("part-time daily class limit", () => {
-  const fourClasses = (faculty = "Dr PT") =>
+describe("daily class limits", () => {
+  /** A lecturer filling every weekday period, back to back. */
+  const fullDay = (faculty = "Dr A") =>
     makeSessions([
-      base({ Faculty: faculty, Time: "8:00AM - 9:00AM", UNITCODE: "A", ROOMCODE: "101" }),
-      base({ Faculty: faculty, Time: "9:30AM - 10:30AM", UNITCODE: "B", ROOMCODE: "102", BATCHCODE: "B2" }),
-      base({ Faculty: faculty, Time: "11:00AM - 12:00PM", UNITCODE: "C", ROOMCODE: "103", BATCHCODE: "B3" }),
-      base({ Faculty: faculty, Time: "1:00PM - 2:00PM", UNITCODE: "D", ROOMCODE: "104", BATCHCODE: "B4" }),
+      base({ Faculty: faculty, WDAY: "MON", Time: "9:00AM - 11:00AM", UNITCODE: "A", ROOMCODE: "101", BATCHCODE: "B1" }),
+      base({ Faculty: faculty, WDAY: "MON", Time: "11:00AM - 1:00PM", UNITCODE: "B", ROOMCODE: "102", BATCHCODE: "B2" }),
+      base({ Faculty: faculty, WDAY: "MON", Time: "2:00PM - 4:00PM", UNITCODE: "C", ROOMCODE: "103", BATCHCODE: "B3" }),
+      base({ Faculty: faculty, WDAY: "MON", Time: "4:00PM - 6:00PM", UNITCODE: "D", ROOMCODE: "104", BATCHCODE: "B4" }),
     ]);
 
-  it("defaults part-time staff to 4 classes per day and full-time to 3", () => {
-    expect(DEFAULT_THRESHOLDS.maxSessionsPerDayPartTime).toBe(4);
-    expect(DEFAULT_THRESHOLDS.maxSessionsPerDay).toBe(3);
+  it("allows four weekday classes and three on Saturday", () => {
+    expect(DEFAULT_THRESHOLDS.maxSessionsPerWeekday).toBe(4);
+    expect(DEFAULT_THRESHOLDS.maxSessionsPerSaturday).toBe(3);
   });
 
-  it("allows a part-time lecturer a 4th class on the same day", () => {
-    const s = fourClasses();
-    const partTime = { ...opts, facultyTypeRegistry: { "Dr PT": "PT" as const } };
-    const errs = validatePlacement(s[3].rowId, placementOf(s[3]), s, partTime).filter(
-      (v) => v.kind === "max_per_day",
-    );
-    expect(errs).toHaveLength(0);
+  it("lets a lecturer teach all four weekday periods back to back", () => {
+    const s = fullDay();
+    for (const session of s) {
+      const errs = validatePlacement(session.rowId, placementOf(session), s, opts).filter(
+        (v) => v.severity === "error",
+      );
+      expect(errs, `${session.unitCode} should be allowed`).toHaveLength(0);
+    }
   });
 
-  it("still blocks a full-time lecturer's 4th class on the same day", () => {
-    const s = fourClasses("Dr FT");
-    const errs = validatePlacement(s[3].rowId, placementOf(s[3]), s, opts).filter(
-      (v) => v.kind === "max_per_day",
-    );
-    expect(errs).toHaveLength(1);
-    expect(errs[0].message).toMatch(/max 3 per day for Full-Time/);
+  it("treats a long back-to-back run as advice, never a blocker", () => {
+    const s = fullDay();
+    const all = validatePlacement(s[3].rowId, placementOf(s[3]), s, opts);
+    expect(all.filter((v) => v.kind === "consecutive" && v.severity === "error")).toHaveLength(0);
   });
 
-  it("blocks a part-time lecturer's 5th class on the same day", () => {
-    const s = [
-      ...fourClasses(),
-      ...makeSessions([
-        base({ Faculty: "Dr PT", Time: "2:30PM - 3:30PM", UNITCODE: "E", ROOMCODE: "105", BATCHCODE: "B5" }),
-      ]).map((x) => ({ ...x, rowId: 5 })),
-    ];
-    const partTime = { ...opts, facultyTypeRegistry: { "Dr PT": "PT" as const } };
-    const errs = validatePlacement(5, placementOf(s[4]), s, partTime).filter(
+  it("blocks a fifth weekday class — there is no fifth period", () => {
+    const s = fullDay();
+    // A fifth class can only exist by doubling up on a period.
+    const fifth = makeSessions([
+      base({ Faculty: "Dr A", WDAY: "MON", Time: "9:00AM - 11:00AM", UNITCODE: "E", ROOMCODE: "105", BATCHCODE: "B5" }),
+    ]).map((x) => ({ ...x, rowId: 5 }));
+    const errs = validatePlacement(5, placementOf(fifth[0]), [...s, ...fifth], opts).filter(
       (v) => v.kind === "max_per_day",
     );
     expect(errs).toHaveLength(1);
-    expect(errs[0].message).toMatch(/max 4 per day for Part-Time/);
+    expect(errs[0].message).toMatch(/only 4 teaching periods exist/);
+  });
+
+  it("caps Saturday at three classes", () => {
+    const sat = makeSessions([
+      base({ Programm: "MSCIT", Faculty: "Dr S", WDAY: "SAT", Time: "9:00AM - 11:00AM", UNITCODE: "A", ROOMCODE: "101", BATCHCODE: "M1" }),
+      base({ Programm: "MSCIT", Faculty: "Dr S", WDAY: "SAT", Time: "11:00AM - 1:00PM", UNITCODE: "B", ROOMCODE: "102", BATCHCODE: "M2" }),
+      base({ Programm: "MSCIT", Faculty: "Dr S", WDAY: "SAT", Time: "2:00PM - 4:00PM", UNITCODE: "C", ROOMCODE: "103", BATCHCODE: "M3" }),
+    ]);
+    for (const session of sat) {
+      const errs = validatePlacement(session.rowId, placementOf(session), sat, opts).filter(
+        (v) => v.kind === "max_per_day",
+      );
+      expect(errs).toHaveLength(0);
+    }
+    const fourth = makeSessions([
+      base({ Programm: "MSCIT", Faculty: "Dr S", WDAY: "SAT", Time: "9:00AM - 11:00AM", UNITCODE: "D", ROOMCODE: "104", BATCHCODE: "M4" }),
+    ]).map((x) => ({ ...x, rowId: 4 }));
+    const errs = validatePlacement(4, placementOf(fourth[0]), [...sat, ...fourth], opts).filter(
+      (v) => v.kind === "max_per_day",
+    );
+    expect(errs[0].message).toMatch(/only 3 teaching periods exist/);
+  });
+
+  it("keeps the weekly hour cap strict even when the day is legal", () => {
+    // Four 2-hour classes a day is fine, but 22h a week is not negotiable.
+    const s = makeSessions([
+      base({ Faculty: "Dr Full", WDAY: "MON", Time: "9:00AM - 11:00AM", Hours: 21, UNITCODE: "A", ROOMCODE: "101", BATCHCODE: "B1" }),
+      base({ Faculty: "Dr Full", WDAY: "TUE", Time: "9:00AM - 11:00AM", Hours: 2, UNITCODE: "B", ROOMCODE: "102", BATCHCODE: "B2" }),
+    ]);
+    const errs = validatePlacement(s[1].rowId, placementOf(s[1]), s, opts).filter(
+      (v) => v.kind === "workload" && v.severity === "error",
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0].message).toMatch(/22h weekly limit/);
   });
 });
 
@@ -225,5 +286,45 @@ describe("search", () => {
     expect(searchSessions(sessions, "RESEARCH")).toHaveLength(1);
     expect(parseQuery("room:204 -online")).toHaveLength(2);
     expect(highlightTerms("research methods")).toEqual(["research", "methods"]);
+  });
+});
+
+describe("Fix panel search cost", () => {
+  /**
+   * Opening Fix generates candidates for one session. Restricting the search to
+   * the official periods and skipping the room loop when a slot fails for a
+   * reason no room can fix took this from ~29ms to ~1ms per session; this guards
+   * against that regressing.
+   */
+  it("plans a busy session quickly", () => {
+    // A full week of teaching, every period, so the search has real work to do.
+    const rows: (string | number | null)[][] = [];
+    const days = ["MON", "TUE", "WED", "THU", "FRI"];
+    const times = ["9:00AM - 11:00AM", "11:00AM - 1:00PM", "2:00PM - 4:00PM", "4:00PM - 6:00PM"];
+    let n = 0;
+    for (const d of days) {
+      for (const t of times) {
+        for (let room = 0; room < 6; room++) {
+          n += 1;
+          rows.push(
+            base({
+              WDAY: d, Time: t, ROOMCODE: `R${room}`, Faculty: `Dr ${n % 20}`,
+              UNITCODE: `U${n}`, BATCHCODE: `B${n % 25}`, Hours: 2,
+            }),
+          );
+        }
+      }
+    }
+    const s = makeSessions(rows);
+    const registry: Record<string, number> = {};
+    for (let room = 0; room < 6; room++) registry[`R${room}`] = 40;
+    const cfg = { ...opts, roomRegistry: registry };
+
+    const started = performance.now();
+    const runs = 20;
+    for (let i = 0; i < runs; i++) reschedulePlans(s[i % s.length], s, cfg);
+    const perCall = (performance.now() - started) / runs;
+
+    expect(perCall, `reschedulePlans took ${perCall.toFixed(1)}ms per session`).toBeLessThan(15);
   });
 });

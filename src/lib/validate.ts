@@ -5,6 +5,7 @@
 import {
   DAY_NAME,
   DayCode,
+  DEFAULT_THRESHOLDS,
   FacultyTypeRegistry,
   RoleMaxHours,
   RoleRegistry,
@@ -16,13 +17,12 @@ import {
   effectiveFacultyType,
   FRIDAY_BLOCK,
   PROG_LEVEL_SHORT,
-  SATURDAY_WINDOW,
   forbiddenOnSaturday,
   programmeLevel,
   requiresSaturday,
-  withinSaturdayWindow,
 } from "./facultyType";
 import { isCombinedPlacement, sharedClassKey } from "./sharedClass";
+import { describeOfficialSlots, isOfficialSlot } from "./slots";
 import { minutesToLabel } from "./clean";
 
 export type ViolationKind =
@@ -73,19 +73,16 @@ export interface ValidateOptions {
     | "capacityTolerance"
     | "maxConsecutiveHours"
     | "maxGapMinutes"
-    | "maxSessionsPerDay"
-    | "maxSessionsPerDayPartTime"
-    | "saturdayStartMin"
-    | "saturdayEndMin"
+    | "maxSessionsPerWeekday"
+    | "maxSessionsPerSaturday"
   >;
 }
 
-/** The configured Saturday teaching window, falling back to the 9 AM–4 PM default. */
-function saturdayWindow(opts: ValidateOptions): { startMin: number; endMin: number } {
-  return {
-    startMin: opts.thresholds?.saturdayStartMin ?? SATURDAY_WINDOW.startMin,
-    endMin: opts.thresholds?.saturdayEndMin ?? SATURDAY_WINDOW.endMin,
-  };
+/** Classes a lecturer may teach on this day — four on weekdays, three on Saturday. */
+function dailyCap(day: DayCode, opts: ValidateOptions): number {
+  return day === "SAT"
+    ? opts.thresholds?.maxSessionsPerSaturday ?? DEFAULT_THRESHOLDS.maxSessionsPerSaturday
+    : opts.thresholds?.maxSessionsPerWeekday ?? DEFAULT_THRESHOLDS.maxSessionsPerWeekday;
 }
 
 const overlap = (
@@ -258,7 +255,9 @@ export function validatePlacement(
       });
   }
 
-  // Consecutive-teaching-hours cap for the (proposed) lecturer on that day.
+  // Consecutive teaching is explicitly allowed — a lecturer may take every
+  // period of the day back to back — so a long run is reported as advice, never
+  // as a reason to refuse a placement.
   if (p.lecturer !== null && opts.thresholds) {
     const maxRun = opts.thresholds.maxConsecutiveHours;
     const gap = opts.thresholds.maxGapMinutes;
@@ -271,19 +270,17 @@ export function validatePlacement(
     if (run > maxRun)
       out.push({
         kind: "consecutive",
-        severity: "error",
-        message: `${p.lecturer} would teach ${round(run)}h back-to-back on ${p.day}, over the ${maxRun}h consecutive limit.`,
+        severity: "warning",
+        message: `${p.lecturer} would teach ${round(run)}h back to back on ${
+          DAY_NAME[p.day] ?? p.day
+        } — allowed, but worth a look.`,
       });
   }
 
-  // Max sessions per lecturer per day (a combined/shared class counts once).
-  // Part-time staff are paid per session, so they get a higher daily allowance.
+  // Classes per lecturer per day (a combined/shared class counts once). A
+  // lecturer may fill every period of the day, back to back if need be.
   if (p.lecturer !== null) {
-    const ft = effectiveFacultyType(p.lecturer, opts.roleRegistry, opts.facultyTypeRegistry);
-    const maxPerDay =
-      ft === "PT"
-        ? opts.thresholds?.maxSessionsPerDayPartTime ?? 4
-        : opts.thresholds?.maxSessionsPerDay ?? 3;
+    const maxPerDay = dailyCap(p.day, opts);
     const others = sameDay.filter((s) => s.lecturer === p.lecturer);
     const distinctKeys = new Set(others.map((s) => sharedClassKey(s) ?? `row-${s.rowId}`));
     // the moving session joins an existing combined class only if it matches one
@@ -293,9 +290,9 @@ export function validatePlacement(
       out.push({
         kind: "max_per_day",
         severity: "error",
-        message: `${p.lecturer} would have ${dayCount} sessions on ${p.day} (max ${maxPerDay} per day for ${
-          ft === "PT" ? "Part-Time" : "Full-Time"
-        } staff).`,
+        message: `${p.lecturer} would have ${dayCount} classes on ${
+          DAY_NAME[p.day] ?? p.day
+        }, but only ${maxPerDay} teaching periods exist that day.`,
       });
   }
 
@@ -330,18 +327,15 @@ export function validatePlacement(
     });
   }
 
-  // Saturday teaching runs 9:00 AM – 4:00 PM; classes must finish by 4:00 PM.
-  if (p.day === "SAT") {
-    const win = saturdayWindow(opts);
-    if (!withinSaturdayWindow(p.startMin, p.endMin, win)) {
-      out.push({
-        kind: "time_window",
-        severity: "error",
-        message: `Saturday classes run ${minutesToLabel(win.startMin)}–${minutesToLabel(
-          win.endMin,
-        )}; ${minutesToLabel(p.startMin)}–${minutesToLabel(p.endMin)} falls outside that window.`,
-      });
-    }
+  // Teaching only happens in the official periods.
+  if (!isOfficialSlot(p.day, p.startMin, p.endMin)) {
+    out.push({
+      kind: "time_window",
+      severity: "error",
+      message: `${minutesToLabel(p.startMin)}–${minutesToLabel(p.endMin)} is not an official ${
+        p.day === "SAT" ? "Saturday" : "weekday"
+      } teaching period. ${p.day === "SAT" ? "Saturday" : "Weekday"} classes run ${describeOfficialSlots(p.day)}.`,
+    });
   }
 
   // Room capacity (warning within tolerance, error beyond).

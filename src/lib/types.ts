@@ -87,14 +87,16 @@ export interface Thresholds {
   farUnderPct: number; // e.g. 0.4
   underutilPct: number; // e.g. 0.4
   capacityTolerance: number; // students over capacity allowed
+  /**
+   * Advisory only. Teaching every period back to back is allowed, so this no
+   * longer blocks a placement — it just surfaces long unbroken runs.
+   */
   maxConsecutiveHours: number;
   maxGapMinutes: number;
-  maxSessionsPerDay: number; // per-lecturer daily session cap (full-time)
-  /** Part-time staff are paid per session, so they may teach more per day. */
-  maxSessionsPerDayPartTime: number;
-  /** Saturday teaching window (minutes from midnight) — 9:00 AM to 4:00 PM. */
-  saturdayStartMin: number;
-  saturdayEndMin: number;
+  /** Classes a lecturer may teach on one weekday — there are four periods. */
+  maxSessionsPerWeekday: number;
+  /** Classes a lecturer may teach on Saturday — there are three periods. */
+  maxSessionsPerSaturday: number;
 }
 
 export const DEFAULT_THRESHOLDS: Thresholds = {
@@ -102,12 +104,10 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
   farUnderPct: 0.4,
   underutilPct: 0.4,
   capacityTolerance: 20,
-  maxConsecutiveHours: 6,
+  maxConsecutiveHours: 9, // the whole teaching day, 9:00 AM – 6:00 PM
   maxGapMinutes: 15,
-  maxSessionsPerDay: 3,
-  maxSessionsPerDayPartTime: 4,
-  saturdayStartMin: 9 * 60,
-  saturdayEndMin: 16 * 60,
+  maxSessionsPerWeekday: 4,
+  maxSessionsPerSaturday: 3,
 };
 
 export type ClashType = "room" | "lecturer" | "batch_code";

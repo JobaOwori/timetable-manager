@@ -15,11 +15,12 @@ import {
 } from "./types";
 import { DEFAULT_ROLE, maxHoursFor } from "./roles";
 import {
-  effectiveFacultyType, SATURDAY_WINDOW, forbiddenOnSaturday, requiresSaturday, workloadStatus,
+  effectiveFacultyType, forbiddenOnSaturday, requiresSaturday, workloadStatus,
 } from "./facultyType";
 import { departmentFor } from "./departments";
 import { finalizeSession } from "./ingest";
 import { minutesToLabel } from "./clean";
+import { slotsForDay } from "./slots";
 import { Placement, ValidateOptions, Violation, ViolationKind, placementOf, validatePlacement } from "./validate";
 
 export const UNASSIGN = "\u2014 Unassign (TBA) \u2014";
@@ -275,9 +276,7 @@ export function rescheduleCandidates(
   // "4:05PM - 6:00AM" typo) must never become a candidate slot: an inverted
   // range overlaps nothing, so it would look conflict-free everywhere and be
   // picked in preference to a real one.
-  const slots = termSlots(termRows);
-  const days = DAY_ORDER.filter((d) => termRows.some((s) => s.day === d));
-  const satSlots = saturdaySlots(slots, session, opts);
+  const days = teachingDays(termRows);
 
   const probe = (day: DayCode, startMin: number, endMin: number): string | null => {
     const placement: Placement = { ...placementOf(session), day, startMin, endMin };
@@ -289,7 +288,7 @@ export function rescheduleCandidates(
 
   const candidates: RescheduleCandidate[] = [];
   for (const day of days) {
-    for (const slot of day === "SAT" ? satSlots : slots) {
+    for (const slot of slotsForDay(day)) {
       // skip the current placement
       if (day === session.day && slot.startMin === session.startMin && slot.endMin === session.endMin) continue;
       const blockedBy = probe(day, slot.startMin, slot.endMin);
@@ -325,32 +324,6 @@ export function rescheduleCandidates(
  * window, plus slots synthesised on the half-hour for the session's own duration
  * so a compliant Saturday placement always exists.
  */
-function saturdaySlots(
-  slots: { startMin: number; endMin: number }[],
-  session: Session,
-  opts: ValidateOptions,
-): { startMin: number; endMin: number }[] {
-  const winStart = opts.thresholds?.saturdayStartMin ?? SATURDAY_WINDOW.startMin;
-  const winEnd = opts.thresholds?.saturdayEndMin ?? SATURDAY_WINDOW.endMin;
-  const out = new Map<string, { startMin: number; endMin: number }>();
-
-  for (const s of slots) {
-    if (s.startMin >= winStart && s.endMin <= winEnd) out.set(`${s.startMin}-${s.endMin}`, s);
-  }
-
-  // Tile the window on the half-hour with this session's own duration.
-  const duration =
-    session.startMin !== null && session.endMin !== null && session.endMin > session.startMin
-      ? session.endMin - session.startMin
-      : Math.round((session.durationHours ?? 2) * 60);
-  if (duration > 0 && duration <= winEnd - winStart) {
-    for (let start = winStart; start + duration <= winEnd; start += 30) {
-      out.set(`${start}-${start + duration}`, { startMin: start, endMin: start + duration });
-    }
-  }
-
-  return [...out.values()].sort((a, b) => a.startMin - b.startMin);
-}
 
 /**
  * A complete, fully-validated proposal for moving a session: a new day/time and,
@@ -387,14 +360,11 @@ export interface ReschedulePlanOptions extends ValidateOptions {
   limit?: number;
 }
 
-/** Distinct (start,end) slots used anywhere in the term, earliest first. */
-function termSlots(termRows: Session[]): { startMin: number; endMin: number }[] {
-  const map = new Map<string, { startMin: number; endMin: number }>();
-  for (const s of termRows) {
-    if (s.startMin === null || s.endMin === null || s.endMin <= s.startMin) continue;
-    map.set(`${s.startMin}-${s.endMin}`, { startMin: s.startMin, endMin: s.endMin });
-  }
-  return [...map.values()].sort((a, b) => a.startMin - b.startMin);
+/** Days that actually have teaching, in week order. */
+function teachingDays(termRows: Session[]): DayCode[] {
+  const present = DAY_ORDER.filter((d) => termRows.some((s) => s.day === d));
+  const candidates = present.length > 0 ? present : DAY_ORDER;
+  return candidates.filter((d) => slotsForDay(d).length > 0);
 }
 
 /**
@@ -465,9 +435,7 @@ export function reschedulePlans(
   const limit = opts.limit ?? 40;
 
   const termRows = sessions.filter((s) => s.term === session.term);
-  const slots = termSlots(termRows);
-  const days = DAY_ORDER.filter((d) => termRows.some((s) => s.day === d));
-  const satSlots = saturdaySlots(slots, session, opts);
+  const days = teachingDays(termRows);
   const base = placementOf(session);
 
   // Rooms to try: keep the current one first, then every other physical room
@@ -493,33 +461,51 @@ export function reschedulePlans(
   const seen = new Set<string>();
   const baseline = baselineKinds(session, sessions, opts);
 
-  const consider = (day: DayCode, slot: { startMin: number; endMin: number }, lecturer: string | null) => {
-    for (const room of rooms) {
-      const placement: Placement = {
-        ...base,
-        day,
-        startMin: slot.startMin,
-        endMin: slot.endMin,
-        room,
-        lecturer,
-      };
-      const violations = validatePlacement(session.rowId, placement, sessions, opts);
-      if (blockingErrors(violations, session, { room, lecturer }, baseline).length > 0) continue;
+  /** Violations a different room could never fix. */
+  const ROOM_FIXABLE: ViolationKind[] = ["room", "capacity"];
 
+  const consider = (day: DayCode, slot: { startMin: number; endMin: number }, lecturer: string | null) => {
+    const place = (room: string | null): Violation[] =>
+      validatePlacement(
+        session.rowId,
+        { ...base, day, startMin: slot.startMin, endMin: slot.endMin, room, lecturer },
+        sessions,
+        opts,
+      );
+
+    const accept = (room: string | null, violations: Violation[]) => {
       const key = `${day}|${slot.startMin}|${slot.endMin}|${room ?? ""}|${lecturer ?? ""}`;
       if (seen.has(key)) return;
       seen.add(key);
       plans.push(
         buildPlan(session, day, slot, room, lecturer, violations.find((v) => v.kind === "capacity")?.message ?? null),
       );
-      // The first room that works at this slot is the best-fitting one; no need
-      // to enumerate the rest for the same slot.
+    };
+
+    // Try the room it is already in first. That is both the least disruptive
+    // option and a cheap filter: if this slot fails for a reason no room can fix
+    // — the lecturer or cohort is busy, the day is full, the weekly cap — then
+    // no point walking every other room for the same slot.
+    const own = place(rooms[0]);
+    const ownBlocking = blockingErrors(own, session, { room: rooms[0], lecturer }, baseline);
+    if (ownBlocking.length === 0) {
+      accept(rooms[0], own);
+      return;
+    }
+    if (ownBlocking.some((v) => !ROOM_FIXABLE.includes(v.kind))) return;
+
+    for (const room of rooms.slice(1)) {
+      const violations = place(room);
+      if (blockingErrors(violations, session, { room, lecturer }, baseline).length > 0) continue;
+      // Rooms are ordered by how snugly they fit, so the first that works is the
+      // best one for this slot.
+      accept(room, violations);
       return;
     }
   };
 
   for (const day of days) {
-    for (const slot of day === "SAT" ? satSlots : slots) {
+    for (const slot of slotsForDay(day)) {
       if (day === session.day && slot.startMin === session.startMin && slot.endMin === session.endMin) {
         continue; // that's where it already is
       }
@@ -531,7 +517,7 @@ export function reschedulePlans(
   // hand the class to a colleague who IS free (and stays within their limits).
   if (plans.length === 0 && alternates.length > 0) {
     for (const day of days) {
-      for (const slot of day === "SAT" ? satSlots : slots) {
+      for (const slot of slotsForDay(day)) {
         for (const lecturer of alternates) {
           consider(day, slot, lecturer);
           if (plans.length >= limit) break;
@@ -622,10 +608,9 @@ export function rescheduleBlockers(
 ): string[] {
   const reasons: string[] = [];
   const termRows = sessions.filter((s) => s.term === session.term);
-  const slots = termSlots(termRows);
-  const days = DAY_ORDER.filter((d) => termRows.some((s) => s.day === d));
+  const days = teachingDays(termRows);
 
-  if (slots.length === 0 || days.length === 0) {
+  if (days.length === 0) {
     return ["This term has no other scheduled day or time slot to move the class to."];
   }
   if (session.day === null || session.startMin === null || session.endMin === null) {
@@ -643,7 +628,7 @@ export function rescheduleBlockers(
   const probeDays = allowedDays.length > 0 ? allowedDays : days;
   let probes = 0;
   for (const day of probeDays) {
-    for (const slot of day === "SAT" ? saturdaySlots(slots, session, opts) : slots) {
+    for (const slot of slotsForDay(day)) {
       const placement: Placement = { ...placementOf(session), day, startMin: slot.startMin, endMin: slot.endMin };
       const errs = blockingErrors(
         validatePlacement(session.rowId, placement, sessions, opts),

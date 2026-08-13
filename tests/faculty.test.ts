@@ -127,13 +127,16 @@ describe("autoResolve", () => {
   });
 
   it("reports unresolved conflicts with plain-language reasons when stuck", () => {
-    // Two cohorts collide and there is literally no other slot to move to.
+    // Cohort B1 already fills every teaching period of the only day in the term,
+    // so the extra class colliding with it has nowhere at all to go.
     const s = makeSessions([
-      base({ UNITCODE: "X", Faculty: "Dr A", ROOMCODE: "101", BATCHCODE: "B1", WDAY: "MON", Time: "9:00AM - 10:55AM" }),
-      base({ UNITCODE: "Y", Faculty: "Dr B", ROOMCODE: "102", BATCHCODE: "B1", WDAY: "MON", Time: "9:00AM - 10:55AM" }),
+      base({ UNITCODE: "X", Faculty: "Dr A", ROOMCODE: "101", BATCHCODE: "B1", WDAY: "MON", Time: "9:00AM - 11:00AM" }),
+      base({ UNITCODE: "Y", Faculty: "Dr B", ROOMCODE: "102", BATCHCODE: "B1", WDAY: "MON", Time: "9:00AM - 11:00AM" }),
+      base({ UNITCODE: "P2", Faculty: "Dr C", ROOMCODE: "103", BATCHCODE: "B1", WDAY: "MON", Time: "11:00AM - 1:00PM" }),
+      base({ UNITCODE: "P3", Faculty: "Dr D", ROOMCODE: "104", BATCHCODE: "B1", WDAY: "MON", Time: "2:00PM - 4:00PM" }),
+      base({ UNITCODE: "P4", Faculty: "Dr E", ROOMCODE: "105", BATCHCODE: "B1", WDAY: "MON", Time: "4:00PM - 6:00PM" }),
     ]);
     const res = autoResolve(s, resolveOpts, { types: ["batch_code"] });
-    // only one slot in the term -> can't reschedule -> unresolved with reasons
     expect(res.unresolved.length).toBeGreaterThan(0);
     for (const unresolved of res.unresolved) {
       const reasons = unresolved.reasons.join(" ");
