@@ -19,15 +19,17 @@ export async function loadTimetable(page: Page) {
   await page.goto("/");
   await page.setInputFiles('input[type="file"]', FIXTURE);
   // The nav only renders once sessions are in the store.
-  await expect(page.getByRole("button", { name: "Resolve", exact: true })).toBeVisible({
-    timeout: 60_000,
-  });
+  await expect(
+    page.locator("header").getByRole("button", { name: "Resolve", exact: true }),
+  ).toBeVisible({ timeout: 60_000 });
   await expect(page.locator("text=/Term \\d+ · \\d+\\/\\d+ sessions/")).toBeVisible();
 }
 
-/** Switch to a top-level tab. */
+/** Switch to a top-level tab. Scoped to the header so it never collides with
+ *  in-page controls that happen to share a label (e.g. the "Resolve" action on
+ *  a clashing class in the master timetable). */
 export async function goTo(page: Page, tab: string) {
-  await page.getByRole("button", { name: tab, exact: true }).click();
+  await page.locator("header").getByRole("button", { name: tab, exact: true }).click();
   await page.waitForTimeout(600);
 }
 
