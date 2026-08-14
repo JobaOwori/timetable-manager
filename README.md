@@ -9,6 +9,37 @@ room**, and export a clean schedule.
 Everything runs in your browser — the file never leaves your device, and there is no
 backend, no database, and no server round-trips (so no refresh lag).
 
+**[Try it live →](https://timetable-lite.vercel.app)**
+
+![The master timetable: every class with its course, lecturer, room and cohorts, colour-coded by faculty, with real conflicts flagged in red](docs/screenshots/timetable.png)
+
+<sub>All screenshots use anonymised demo data — no real staff or student information.</sub>
+
+<details>
+<summary><b>More screenshots</b></summary>
+
+### Resolve conflicts
+
+Merge duplicate course rows, and see every policy breach explained in plain English
+with the rule and what to do about it.
+
+![The Resolve screen showing mergeable duplicate courses and scheduling policy breaches](docs/screenshots/resolve.png)
+
+### Faculty workload
+
+Role-based weekly caps, Full-Time / Part-Time status, and per-lecturer drill-down —
+right-click any lecturer to assign their role in place.
+
+![The Faculty screen showing per-lecturer workload against their weekly cap](docs/screenshots/faculty.png)
+
+### Overview
+
+Headline counts for clashes, workload balance, room utilisation and data quality.
+
+![The Overview dashboard showing clash counts, lecturer workload and busiest rooms](docs/screenshots/overview.png)
+
+</details>
+
 ## Highlights
 
 - **⚡ Instant & private** — the entire analysis engine runs client-side in TypeScript.
